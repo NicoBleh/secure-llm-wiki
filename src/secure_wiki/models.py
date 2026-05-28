@@ -77,10 +77,22 @@ class Claim:
         d["status"] = self.status.value
         return d
 
-    # TODO(claude-code): from_dict / Serialisierung nach YAML-Frontmatter
-    #                    bzw. .meta.json (siehe Spec 6, Seiten-Format).
-
-
-# TODO(claude-code): Wenn das Datenmodell steht, beginne mit Prio-1:
-#   1) ingestion/  — Daten/Instruktions-Trennung + Sanitizing
-#   2) Diese Claim-Struktur als gemeinsame Schnittstelle aller Schichten nutzen.
+    @classmethod
+    def from_dict(cls, d: dict) -> "Claim":
+        source = SourceRef(
+            id=d["source"]["id"],
+            uri=d["source"]["uri"],
+            section=d["source"]["section"],
+            content_hash=d["source"]["content_hash"],
+        )
+        return cls(
+            text=d["text"],
+            source=source,
+            trust_level=TrustLevel(d["trust_level"]),
+            claim_id=d["claim_id"],
+            ingested_at=d["ingested_at"],
+            status=ClaimStatus(d["status"]),
+            gates_passed=d.get("gates_passed", []),
+            supersedes=d.get("supersedes"),
+            review_notes=d.get("review_notes"),
+        )

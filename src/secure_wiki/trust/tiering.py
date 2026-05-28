@@ -10,6 +10,7 @@ assign_trust() handles per-source assignment.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,8 +19,14 @@ import yaml
 
 from ..models import TrustLevel
 
-# Resolved at import time: src/secure_wiki/trust/ → src/secure_wiki/ → src/ → project root
-_DEFAULT_RULES_FILE = Path(__file__).parent.parent.parent.parent / "wiki_data" / "trust_rules.yaml"
+
+def _rules_file() -> Path:
+    """Resolve trust_rules.yaml from $WIKI_DATA_PATH or the default location."""
+    wiki_root = os.environ.get(
+        "WIKI_DATA_PATH",
+        str(Path(__file__).parent.parent.parent.parent / "wiki_data"),
+    )
+    return Path(wiki_root) / "trust_rules.yaml"
 
 _BUILTIN_RULES: list[dict] = [
     {"pattern": r"attack\.mitre\.org",   "level": "trusted",      "comment": "MITRE ATT&CK"},
@@ -65,7 +72,7 @@ class TrustRegistry:
     @classmethod
     def from_yaml(cls, path: Path | None = None) -> TrustRegistry:
         """Load user rules from a YAML file, falling back to built-ins only."""
-        rules_path = path or _DEFAULT_RULES_FILE
+        rules_path = path or _rules_file()
         extra: list[TrustRule] = []
         if rules_path.exists():
             raw = yaml.safe_load(rules_path.read_text()) or {}

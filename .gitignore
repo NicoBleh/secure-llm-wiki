@@ -7,3 +7,4 @@ venv/
 .venv/
 CLAUDE.md
 .DS_Store
+wiki_data/
