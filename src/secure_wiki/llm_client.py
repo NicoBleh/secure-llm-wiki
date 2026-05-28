@@ -23,6 +23,44 @@ def strip_fences(text: str) -> str:
     return text.strip()
 
 
+def extract_json_object(text: str) -> str:
+    """Extract the first complete JSON object from text that may have trailing prose."""
+    text = strip_fences(text)
+    # Fast path: entire text is already valid JSON
+    try:
+        import json
+        json.loads(text)
+        return text
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Find the first {...} span by scanning for balanced braces
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text[start:], start):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return text
+
+
 class OllamaClient:
     def __init__(self, model: str, host: str) -> None:
         import ollama

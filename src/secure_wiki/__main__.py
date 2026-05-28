@@ -17,7 +17,9 @@ Usage after install:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -38,17 +40,61 @@ from .store.wiki_store import WikiStore
 from .trust.tiering import assign_trust
 
 _LINE = "─" * 60
+_MAX_CHARS = 8_000  # extraction model context limit — keep input focused
+
+
+class _HtmlStripper(HTMLParser):
+    """Extract visible text from HTML, skipping scripts, styles, and nav."""
+    _SKIP = {"script", "style", "head", "nav", "footer", "header", "noscript"}
+    _BLOCK = {"p", "div", "section", "article", "h1", "h2", "h3", "h4", "li", "tr", "br"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._skip_depth = 0
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag in self._SKIP:
+            self._skip_depth += 1
+        elif tag in self._BLOCK:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP:
+            self._skip_depth = max(0, self._skip_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            self._parts.append(data)
+
+    def get_text(self) -> str:
+        text = "".join(self._parts)
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _strip_html(content: str) -> str:
+    stripper = _HtmlStripper()
+    stripper.feed(content)
+    return stripper.get_text()
 
 
 def _read_source(source: str) -> tuple[str, str]:
-    """Return (text, uri) from a file path or HTTP URL."""
+    """Return (text, uri) from a file path or HTTP URL.
+
+    HTML content is stripped to plain text before returning. Content is
+    truncated to _MAX_CHARS so the extraction model receives a focused input.
+    """
     if source.startswith(("http://", "https://")):
         import urllib.request
         with urllib.request.urlopen(source, timeout=30) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
-        return text, source
+            content_type = resp.headers.get("Content-Type", "")
+            raw = resp.read().decode("utf-8", errors="replace")
+        if "html" in content_type or raw.lstrip().startswith(("<!DOCTYPE", "<html")):
+            raw = _strip_html(raw)
+        return raw[:_MAX_CHARS], source
     path = Path(source)
-    return path.read_text(encoding="utf-8"), f"file://{path.resolve()}"
+    text = path.read_text(encoding="utf-8")
+    return text[:_MAX_CHARS], f"file://{path.resolve()}"
 
 
 def _domain(uri: str) -> str:

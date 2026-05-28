@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from ..llm_client import get_review_client, strip_fences
+from ..llm_client import extract_json_object, get_review_client
 from ..models import Claim
 
 
@@ -66,7 +66,7 @@ def review_write(
     raw = client.complete(REVIEW_SYSTEM_PROMPT, user)
 
     try:
-        result = json.loads(strip_fences(raw))
+        result = json.loads(extract_json_object(raw))
         passed = result.get("verdict") == "pass"
         reasons = result.get("reasons", [])
     except json.JSONDecodeError:
