@@ -1,0 +1,4 @@
+The OWASP LLM Top 10 is a community-driven list of the most critical security
+risks for applications using large language models. LLM01 covers Prompt
+Injection, where crafted input manipulates model behavior. The list is updated
+periodically and is widely referenced in AI security assessments.
