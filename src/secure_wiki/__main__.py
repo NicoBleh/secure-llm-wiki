@@ -219,15 +219,25 @@ def cmd_query(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     system = f"{ctx.system_note}\n\n{ctx.context_block}\n\n{_QUERY_TASK_PROMPT}"
-    user = args.question
+    client = get_review_client()
 
     print(f"\n[query] {ctx.claim_count} claim(s) loaded (min_trust={args.min_trust})")
+    print("[query] Type 'exit' to quit.")
     print(_LINE)
 
-    client = get_review_client()
-    answer = client.complete(system, user)
-    print(answer)
-    print()
+    while True:
+        try:
+            question = input("\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if question.lower() in {"exit", "quit", "q"}:
+            break
+        if not question:
+            continue
+        answer = client.complete(system, question)
+        print()
+        print(answer)
 
 
 def cmd_context(args: argparse.Namespace) -> None:
@@ -295,8 +305,7 @@ def main() -> None:
     ingest_p.add_argument("--section", default="full", help="Section label (default: full)")
 
     # query
-    query_p = sub.add_parser("query", help="Ask a question answered from the wiki")
-    query_p.add_argument("question", help="Question to answer using wiki knowledge")
+    query_p = sub.add_parser("query", help="Open an interactive wiki Q&A session")
     query_p.add_argument(
         "--min-trust",
         choices=["trusted", "semi-trusted", "untrusted"],
