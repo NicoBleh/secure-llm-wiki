@@ -115,7 +115,11 @@ secure-wiki list
 # List quarantined claims (blocked by a gate)
 secure-wiki list --quarantine
 
-# Print the wiki as a safe, nonce-delimited context block for downstream sessions
+# Ask a question answered from wiki knowledge (cites sources, no speculation)
+secure-wiki query "What are the rules for aware vs naive datetime objects?"
+secure-wiki query "What does timedelta store internally?" --min-trust trusted
+
+# Print the raw nonce-delimited context block (for piping into other tools)
 secure-wiki context
 secure-wiki context --min-trust trusted
 ```
