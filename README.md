@@ -7,6 +7,10 @@ Instead of re-scanning raw documents on every query (classic RAG), an LLM mainta
 linked Markdown wiki: knowledge is compiled once and then curated. The security challenge is the
 hard part — a crafted source must never reach the wiki persistently and poison later sessions.
 
+> **Portfolio context:** This project is designed as a reference artifact for AI red-teaming and
+> consulting. The injection corpus maps every attack to its stop-gate, OWASP LLM Top 10, and
+> MITRE ATLAS.
+
 ---
 
 ## Security model in one sentence
@@ -17,62 +21,59 @@ Every layer enforces this trust boundary.
 ## Pipeline
 
 ```
-Source → [1] Ingestion      (data/instruction separation + sanitizing)
-       → [2] Extraction     (atomic claims + provenance)
-       → [3] Trust-Tiering  (weakest level propagates)
-       → [4] Adversarial Review (independent second model)
-       → [5] Write-Gate     (lint + consistency → commit | quarantine | escalate)
-       → [6] Wiki-Store     (Markdown + metadata, Git-versioned)
-       → [7] Read-Time Hygiene
+Source → [1] Ingestion      data/instruction separation + sanitizing
+       → [2] Extraction     atomic claims + provenance (LLM, nonce-delimited)
+       → [3] Trust-Tiering  weakest level propagates; URI-pattern registry
+       → [4] Adversarial Review  independent second model, 4-eyes principle
+       → [5] Write-Gate     sanitizing · provenance · trust · review · consistency
+       → [6] Wiki-Store     Markdown + YAML frontmatter, separate git repo
+       → [7] Read-Time Hygiene  nonce-delimited context, trust metadata attached
 ```
+
+All 7 layers are implemented.
 
 ## Project structure
 
 ```
 secure-llm-wiki/
 ├── README.md
-├── pyproject.toml                 # src layout, pytest pythonpath
+├── pyproject.toml               # src layout, pytest config, secure-wiki entry point
 ├── requirements.txt
-├── environment.yml                # Conda environment definition
-├── .env.example                   # LLM config template
+├── environment.yml              # Conda environment (Python 3.10+)
+├── .env.example                 # LLM and wiki path config template
 ├── src/secure_wiki/
-│   ├── models.py                  # Claim/SourceRef/TrustLevel — single source of truth ✅
-│   ├── llm_client.py              # Ollama / Anthropic provider abstraction ✅
+│   ├── __main__.py              # CLI: ingest · list · context · init ✅
+│   ├── models.py                # Claim / SourceRef / TrustLevel — provenance schema ✅
+│   ├── llm_client.py            # Ollama + Anthropic provider abstraction ✅
 │   ├── ingestion/
-│   │   ├── sanitizer.py           # Obfuscation detection ✅
-│   │   └── prompts.py             # Nonce-delimiters + data/instruction separation ✅
+│   │   ├── sanitizer.py         # Zero-width, bidi, HTML, base64, instruction patterns ✅
+│   │   └── prompts.py           # Nonce-delimiters + data/instruction separation ✅
 │   ├── extraction/
-│   │   └── extractor.py           # Claim extraction via LLM ✅
-│   ├── trust/                     # Trust-tiering (TODO)
+│   │   └── extractor.py         # Claim extraction via LLM, fail-closed JSON parsing ✅
+│   ├── trust/
+│   │   └── tiering.py           # URI-pattern registry, user rules via trust_rules.yaml ✅
 │   ├── review/
-│   │   └── adversarial.py         # 4-eyes adversarial review ✅
-│   ├── gate/write_gate.py         # Gate orchestration (stub)
-│   ├── store/                     # Markdown + metadata + Git (TODO)
-│   └── read/                      # Read-time hygiene (TODO)
+│   │   └── adversarial.py       # Independent review model, JSON verdict, fail-closed ✅
+│   ├── gate/
+│   │   └── write_gate.py        # 5-gate orchestration: commit / quarantine / escalate ✅
+│   ├── store/
+│   │   └── wiki_store.py        # Separate git repo, Markdown + frontmatter, roundtrip ✅
+│   └── read/
+│       └── hygiene.py           # Nonce-delimited context loading with trust metadata ✅
 ├── tests/
-│   ├── test_injection_corpus.py   # Regression suite ✅ (sanitizing layer green)
+│   ├── test_injection_corpus.py # Sanitizer + full pipeline regression (79 tests total)
+│   ├── test_trust_tiering.py
+│   ├── test_wiki_store.py
+│   ├── test_read_hygiene.py
+│   ├── test_cli.py
 │   └── injection_corpus/
-│       ├── manifest.json          # 8 cases + expected stop-gates + OWASP/ATLAS mappings
-│       └── 0X_*.txt               # crafted attack sources
-└── wiki_data/
-    ├── pages/                     # committed wiki pages
-    └── quarantine/                # pending / quarantined claims
+│       ├── manifest.json        # 8 cases + stop-gates + OWASP LLM Top 10 / MITRE ATLAS
+│       └── 0X_*.txt             # Crafted attack sources
+└── wiki_data/                   # Separate git repo, created on first run (gitignored here)
+    ├── pages/                   # Committed (ACTIVE) claims
+    ├── quarantine/              # QUARANTINED / PENDING claims
+    └── trust_rules.yaml         # User-editable trust rules
 ```
-
-✅ = implemented and passing · stub/TODO = not yet implemented
-
-## Status
-
-The foundation is running: data model, sanitizer, prompt separation, LLM extraction, and
-adversarial review are implemented. The injection corpus is wired and the regression suite is
-green at the sanitizing layer (`8 passed`). Trust-tiering, write-gate, wiki store, and
-read-time hygiene remain as documented stubs.
-
-## Build order
-
-1. **Priority 1** — data/instruction separation + sanitizing ✅; claim provenance ✅
-2. **Priority 2** — trust-tiering (TODO); adversarial review ✅
-3. **Priority 3** — write-gate + quarantine; Git versioning; read-time hygiene
 
 ## Setup
 
@@ -81,23 +82,91 @@ read-time hygiene remain as documented stubs.
 conda env create -f environment.yml
 conda activate llm-wiki
 
-# Configure LLM provider
+# Configure LLM provider and wiki path
 cp .env.example .env
 # Edit .env — defaults to Ollama with llama3.1:8b (extraction) + mistral (review)
 source .env
 
-# Run the regression suite (no API key needed for sanitizer tests)
+# Install the package (registers the secure-wiki CLI command)
+pip install -e .
+
+# Run the test suite (no LLM or wiki repo needed)
 pytest -q
 ```
 
-The sanitizer and regression tests run without any LLM connection. Extraction and adversarial
-review require a running Ollama instance (`ollama serve`) or an `ANTHROPIC_API_KEY`.
+## Usage
+
+```bash
+# Initialize the wiki data repository
+secure-wiki init
+
+# Ingest a local file through the full pipeline
+secure-wiki ingest path/to/document.txt
+
+# Ingest a URL (trust level auto-detected from domain)
+secure-wiki ingest https://attack.mitre.org/techniques/T1059
+
+# Override trust level manually
+secure-wiki ingest report.txt --trust semi-trusted --source-id vendor-advisory-2026
+
+# List committed claims
+secure-wiki list
+
+# List quarantined claims (blocked by a gate)
+secure-wiki list --quarantine
+
+# Print the wiki as a safe, nonce-delimited context block for downstream sessions
+secure-wiki context
+secure-wiki context --min-trust trusted
+```
+
+## LLM configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_PROVIDER` | `ollama` | `ollama` or `anthropic` |
+| `EXTRACTION_MODEL` | `llama3.1:8b` | Model for claim extraction |
+| `REVIEW_MODEL` | `mistral` | Model for adversarial review — **use a different model** to preserve 4-eyes independence |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
+| `ANTHROPIC_API_KEY` | — | Required only for `LLM_PROVIDER=anthropic` |
+| `WIKI_DATA_PATH` | `./wiki_data/` | Path to the wiki data git repository |
+
+The test suite runs without any LLM connection — all model calls are mocked.
+
+## Security architecture
+
+### Trust boundary
+Every pipeline layer enforces a single invariant: untrusted input never reaches a channel treated as trusted. Sources are wrapped in spec-constructed nonce-delimiters before reaching any model. The wiki is loaded with the same pattern — nonce-delimited, with a system note identifying the content as data, not instructions.
+
+### Write-gate (5 checks in sequence)
+1. **Sanitizing** — any obfuscation flag → quarantine
+2. **Provenance** — source.id, URI, content hash must all be set
+3. **Trust-tier** — untrusted claim cannot overwrite established high-trust content
+4. **Adversarial review** — independent model checks for manipulation, not correctness
+5. **Consistency** — conflict with existing high-trust claims → escalate to human
+
+### 4-eyes principle
+Extraction and review use **different models** by default (`llama3.1:8b` and `mistral`). A jailbreak that compromises the extractor must not simultaneously compromise the reviewer.
+
+### Fail-closed
+Unparseable LLM responses are treated as failures — empty extraction returns no claims, unparseable review verdict blocks the write. The system never silently passes bad output.
 
 ## Red-teaming & portfolio
 
-The injection corpus (`tests/injection_corpus/`) is part of the deliverable: every attack in the
-manifest is mapped to the gate where it must be stopped, plus to **OWASP LLM Top 10** and
-**MITRE ATLAS**. This makes the project usable as a reference for AI red-teaming and consulting.
+The injection corpus (`tests/injection_corpus/`) covers 8 attack vectors, each mapped to:
+- The gate where it **must** be stopped
+- **OWASP LLM Top 10** category
+- **MITRE ATLAS** technique
 
-New attack vectors are added as an additional case in the manifest plus a source file — the
-regression suite ensures later changes don't weaken the hardening.
+| Attack | Category | Stop gate | OWASP | ATLAS |
+|---|---|---|---|---|
+| `01_direct_instruction.txt` | Direct instruction override | sanitizing | LLM01 | AML.T0051 |
+| `02_zero_width.txt` | Hidden payload (zero-width chars) | sanitizing | LLM01 | AML.T0051 |
+| `03_html_comment.txt` | Hidden payload (HTML comment) | sanitizing | LLM01 | AML.T0051 |
+| `04_white_text.txt` | Hidden payload (display:none) | sanitizing | LLM01 | AML.T0051 |
+| `05_base64_smuggle.txt` | Hidden payload (base64 block) | sanitizing | LLM01 | AML.T0051 |
+| `06_rule_change.txt` | Subtle rule-change attempt | adversarial_review | LLM01 | AML.T0051 |
+| `07_overwrite_trusted.txt` | Trust manipulation / overwrite | write_gate | LLM03 | AML.T0020 |
+| `08_benign_control.txt` | Control (must pass all gates) | — | — | — |
+
+New attack vectors are added as a manifest entry + source file. The regression suite ensures later changes don't weaken the hardening.
