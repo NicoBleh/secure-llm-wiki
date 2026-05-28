@@ -32,6 +32,7 @@ except ImportError:
     pass
 
 from .extraction.extractor import extract_claims
+from .llm_client import get_review_client
 from .gate.write_gate import GateDecision, run_write_gate
 from .ingestion.sanitizer import sanitize
 from .models import SourceRef, TrustLevel
@@ -201,6 +202,34 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     print()
 
 
+_QUERY_TASK_PROMPT = """\
+Answer the user's question using ONLY the evidence in the wiki context block \
+provided in the system prompt. Cite the source URI for each claim you use. \
+If the wiki does not contain enough information to answer, say so explicitly — \
+do not speculate beyond the evidence.\
+"""
+
+
+def cmd_query(args: argparse.Namespace) -> None:
+    min_trust = TrustLevel(args.min_trust)
+    ctx = load_for_context(min_trust=min_trust, include_pending=args.include_pending)
+
+    if ctx.claim_count == 0:
+        print(f"\n[query] Wiki is empty (min_trust={args.min_trust}). Run 'secure-wiki ingest' first.")
+        sys.exit(1)
+
+    system = f"{ctx.system_note}\n\n{ctx.context_block}\n\n{_QUERY_TASK_PROMPT}"
+    user = args.question
+
+    print(f"\n[query] {ctx.claim_count} claim(s) loaded (min_trust={args.min_trust})")
+    print(_LINE)
+
+    client = get_review_client()
+    answer = client.complete(system, user)
+    print(answer)
+    print()
+
+
 def cmd_context(args: argparse.Namespace) -> None:
     min_trust = TrustLevel(args.min_trust)
     ctx = load_for_context(min_trust=min_trust, include_pending=args.include_pending)
@@ -265,6 +294,21 @@ def main() -> None:
     ingest_p.add_argument("--source-id", help="Human-readable identifier for this source")
     ingest_p.add_argument("--section", default="full", help="Section label (default: full)")
 
+    # query
+    query_p = sub.add_parser("query", help="Ask a question answered from the wiki")
+    query_p.add_argument("question", help="Question to answer using wiki knowledge")
+    query_p.add_argument(
+        "--min-trust",
+        choices=["trusted", "semi-trusted", "untrusted"],
+        default="semi-trusted",
+        help="Minimum trust level to include (default: semi-trusted)",
+    )
+    query_p.add_argument(
+        "--include-pending",
+        action="store_true",
+        help="Also include PENDING (unreviewed) claims",
+    )
+
     # context
     ctx_p = sub.add_parser("context", help="Print wiki content as a safe context block")
     ctx_p.add_argument(
@@ -289,6 +333,8 @@ def main() -> None:
         cmd_init(args)
     elif args.command == "ingest":
         cmd_ingest(args)
+    elif args.command == "query":
+        cmd_query(args)
     elif args.command == "context":
         cmd_context(args)
     elif args.command == "list":
