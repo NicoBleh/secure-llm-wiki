@@ -3,6 +3,7 @@
 Commands:
   ingest <source>   Run the full pipeline on a file or HTTP URI
   list              Show active wiki claims (--quarantine for quarantine)
+  context           Print wiki content as a safe, nonce-delimited context block
   init              Initialize the wiki repo
 
 Usage after install:
@@ -10,6 +11,8 @@ Usage after install:
   secure-wiki ingest https://attack.mitre.org/...
   secure-wiki list
   secure-wiki list --quarantine
+  secure-wiki context
+  secure-wiki context --min-trust trusted
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ from .extraction.extractor import extract_claims
 from .gate.write_gate import GateDecision, run_write_gate
 from .ingestion.sanitizer import sanitize
 from .models import SourceRef, TrustLevel
+from .read.hygiene import load_for_context
 from .store.wiki_store import WikiStore
 from .trust.tiering import assign_trust
 
@@ -143,6 +147,19 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     print()
 
 
+def cmd_context(args: argparse.Namespace) -> None:
+    min_trust = TrustLevel(args.min_trust)
+    ctx = load_for_context(min_trust=min_trust, include_pending=args.include_pending)
+    print(f"\n# System note ({ctx.claim_count} claim(s), min_trust={args.min_trust})")
+    print(_LINE)
+    print(ctx.system_note)
+    print()
+    print("# Context block")
+    print(_LINE)
+    print(ctx.context_block)
+    print()
+
+
 def cmd_list(args: argparse.Namespace) -> None:
     store = WikiStore()
     if args.quarantine:
@@ -194,6 +211,20 @@ def main() -> None:
     ingest_p.add_argument("--source-id", help="Human-readable identifier for this source")
     ingest_p.add_argument("--section", default="full", help="Section label (default: full)")
 
+    # context
+    ctx_p = sub.add_parser("context", help="Print wiki content as a safe context block")
+    ctx_p.add_argument(
+        "--min-trust",
+        choices=["trusted", "semi-trusted", "untrusted"],
+        default="semi-trusted",
+        help="Minimum trust level to include (default: semi-trusted)",
+    )
+    ctx_p.add_argument(
+        "--include-pending",
+        action="store_true",
+        help="Also include PENDING (unreviewed) claims",
+    )
+
     # list
     list_p = sub.add_parser("list", help="List wiki claims")
     list_p.add_argument("--quarantine", action="store_true", help="Show quarantined claims")
@@ -204,6 +235,8 @@ def main() -> None:
         cmd_init(args)
     elif args.command == "ingest":
         cmd_ingest(args)
+    elif args.command == "context":
+        cmd_context(args)
     elif args.command == "list":
         cmd_list(args)
     else:
