@@ -32,11 +32,12 @@ except ImportError:
     pass
 
 from .extraction.extractor import extract_claims
-from .llm_client import get_review_client
 from .gate.write_gate import GateDecision, run_write_gate
 from .ingestion.sanitizer import sanitize
+from .llm_client import get_embed_client, get_review_client
 from .models import SourceRef, TrustLevel
 from .read.hygiene import load_for_context
+from .store.embedding_store import EmbeddingStore
 from .store.wiki_store import WikiStore
 from .trust.tiering import assign_trust
 
@@ -171,17 +172,38 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
     # 6. Gate + store each claim
     store = WikiStore()
+    emb_store = EmbeddingStore(store)
     existing = store.load_claims()
+    existing_embeddings = emb_store.load_all()
+
+    # Pre-compute embeddings for all new claims in one pass; fall back gracefully
+    try:
+        embed_client = get_embed_client()
+        new_embeddings = {c.claim_id: embed_client.embed(c.text) for c in claims}
+        print(f"[embed]    embeddings computed for {len(claims)} claim(s)")
+    except Exception as exc:
+        print(f"[embed]    unavailable ({exc}), Gate 5 falls back to section heuristic")
+        new_embeddings = {}
+
     committed = quarantined = escalated = 0
     width = len(f"[gate {len(claims)}/{len(claims)}]") + 2
 
     for i, claim in enumerate(claims, 1):
         label = f"[gate {i}/{len(claims)}]".ljust(width)
-        outcome = run_write_gate(claim, report, existing)
+        outcome = run_write_gate(
+            claim,
+            report,
+            existing,
+            new_embedding=new_embeddings.get(claim.claim_id),
+            existing_embeddings=existing_embeddings or None,
+        )
 
         if outcome.decision == GateDecision.COMMIT:
             store.save_claim(claim)
             existing.append(claim)
+            if claim.claim_id in new_embeddings:
+                emb_store.save(claim.claim_id, new_embeddings[claim.claim_id])
+                existing_embeddings[claim.claim_id] = new_embeddings[claim.claim_id]
             committed += 1
             print(f"{label} COMMIT      {_preview(claim.text)}")
         elif outcome.decision == GateDecision.QUARANTINE:

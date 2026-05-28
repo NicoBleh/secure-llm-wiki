@@ -78,6 +78,10 @@ class OllamaClient:
         )
         return response.message.content
 
+    def embed(self, text: str) -> list[float]:
+        response = self._client.embed(model=self._model, input=text)
+        return response.embeddings[0]
+
 
 class AnthropicClient:
     def __init__(self, model: str) -> None:
@@ -94,6 +98,9 @@ class AnthropicClient:
         )
         return msg.content[0].text
 
+    def embed(self, text: str) -> list[float]:
+        raise NotImplementedError("Anthropic provider does not support embeddings; set LLM_PROVIDER=ollama for Gate 5 similarity checks")
+
 
 _EXTRACTION_DEFAULTS: dict[str, str] = {
     "ollama": "llama3.2",
@@ -103,14 +110,22 @@ _REVIEW_DEFAULTS: dict[str, str] = {
     "ollama": "mistral",
     "anthropic": "claude-haiku-4-5-20251001",
 }
+_EMBED_DEFAULTS: dict[str, str] = {
+    "ollama": "nomic-embed-text",
+    "anthropic": "",
+}
 
 
 def _build_client(role: str) -> OllamaClient | AnthropicClient:
     provider = os.environ.get("LLM_PROVIDER", "ollama").lower()
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    defaults = _EXTRACTION_DEFAULTS if role == "extraction" else _REVIEW_DEFAULTS
-    env_key = "EXTRACTION_MODEL" if role == "extraction" else "REVIEW_MODEL"
-    model = os.environ.get(env_key, defaults.get(provider, "llama3.2"))
+    if role == "extraction":
+        defaults, env_key = _EXTRACTION_DEFAULTS, "EXTRACTION_MODEL"
+    elif role == "review":
+        defaults, env_key = _REVIEW_DEFAULTS, "REVIEW_MODEL"
+    else:
+        defaults, env_key = _EMBED_DEFAULTS, "EMBED_MODEL"
+    model = os.environ.get(env_key, defaults.get(provider, ""))
     if provider == "anthropic":
         return AnthropicClient(model)
     return OllamaClient(model, host=host)
@@ -122,3 +137,7 @@ def get_extraction_client() -> OllamaClient | AnthropicClient:
 
 def get_review_client() -> OllamaClient | AnthropicClient:
     return _build_client("review")
+
+
+def get_embed_client() -> OllamaClient | AnthropicClient:
+    return _build_client("embed")

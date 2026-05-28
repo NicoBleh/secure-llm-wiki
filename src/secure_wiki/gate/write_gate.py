@@ -8,7 +8,10 @@ Gates run in sequence (fail-fast):
   2. Provenance complete     — source.id, uri, content_hash all set
   3. Trust-tier              — untrusted claim cannot overwrite high-trust content
   4. Adversarial review      — independent model found no manipulation
-  5. Consistency             — no contradiction with existing high-trust claims
+  5. Consistency             — embedding similarity against existing claims:
+                               >= duplicate_threshold  → quarantine (duplicate)
+                               >= conflict_threshold   → escalate (human review)
+                               (falls back to section heuristic if no embeddings)
 """
 from __future__ import annotations
 
@@ -18,6 +21,11 @@ from enum import Enum
 from ..ingestion.sanitizer import SanitizeReport
 from ..models import Claim, ClaimStatus, TrustLevel
 from ..review.adversarial import review_write
+from ..store.embedding_store import cosine_similarity
+
+# Thresholds — overridable via trust_rules.yaml (loaded by caller)
+DEFAULT_DUPLICATE_THRESHOLD = 0.95
+DEFAULT_CONFLICT_THRESHOLD = 0.85
 
 
 class GateDecision(str, Enum):
@@ -37,6 +45,10 @@ def run_write_gate(
     claim: Claim,
     sanitize_report: SanitizeReport,
     existing_claims: list[Claim] | None = None,
+    new_embedding: list[float] | None = None,
+    existing_embeddings: dict[str, list[float]] | None = None,
+    duplicate_threshold: float = DEFAULT_DUPLICATE_THRESHOLD,
+    conflict_threshold: float = DEFAULT_CONFLICT_THRESHOLD,
 ) -> GateOutcome:
     """Run all gates in sequence and return a commit/quarantine/escalate decision.
 
@@ -100,20 +112,45 @@ def run_write_gate(
         )
     claim.gates_passed.append("adversarial_review")
 
-    # Gate 5: consistency — same section, different source = potential contradiction
-    conflicts = [
-        c for c in existing_trusted
-        if c.source.section == claim.source.section and c.source.id != claim.source.id
-    ]
-    if conflicts:
-        return GateOutcome(
-            decision=GateDecision.ESCALATE,
-            claim=claim,
-            detail=(
-                f"consistency: contradicts {len(conflicts)} high-trust claim(s) "
-                "in the same section — human review required"
-            ),
+    # Gate 5: consistency — embedding-based duplicate/conflict detection
+    if new_embedding is not None and existing_embeddings:
+        best_id, best_score = max(
+            existing_embeddings.items(),
+            key=lambda kv: cosine_similarity(new_embedding, kv[1]),
+            default=(None, 0.0),
         )
+        if best_id is not None:
+            score = cosine_similarity(new_embedding, existing_embeddings[best_id])
+            if score >= duplicate_threshold:
+                return GateOutcome(
+                    decision=GateDecision.QUARANTINE,
+                    claim=claim,
+                    detail=f"consistency: duplicate of {best_id[:8]} (similarity={score:.3f})",
+                )
+            if score >= conflict_threshold:
+                return GateOutcome(
+                    decision=GateDecision.ESCALATE,
+                    claim=claim,
+                    detail=(
+                        f"consistency: semantically similar to {best_id[:8]} "
+                        f"(similarity={score:.3f}) — human review required"
+                    ),
+                )
+    else:
+        # Fallback heuristic when embeddings are unavailable
+        conflicts = [
+            c for c in existing_trusted
+            if c.source.section == claim.source.section and c.source.id != claim.source.id
+        ]
+        if conflicts:
+            return GateOutcome(
+                decision=GateDecision.ESCALATE,
+                claim=claim,
+                detail=(
+                    f"consistency: contradicts {len(conflicts)} high-trust claim(s) "
+                    "in the same section — human review required"
+                ),
+            )
     claim.gates_passed.append("consistency")
 
     claim.status = ClaimStatus.ACTIVE
