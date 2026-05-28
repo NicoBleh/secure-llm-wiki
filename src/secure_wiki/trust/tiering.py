@@ -111,3 +111,26 @@ def _get_registry() -> TrustRegistry:
 def assign_trust(uri: str) -> TrustLevel:
     """Assign a TrustLevel to a source URI using the default registry."""
     return _get_registry().assign(uri)
+
+
+def load_similarity_config(path: Path | None = None) -> dict[str, float]:
+    """Load Gate 5 similarity thresholds from trust_rules.yaml.
+
+    Returns a dict with keys 'duplicate_threshold' and 'conflict_threshold'.
+    Falls back to safe defaults if the file or section is missing.
+    """
+    from ..gate.write_gate import DEFAULT_CONFLICT_THRESHOLD, DEFAULT_DUPLICATE_THRESHOLD
+
+    defaults = {
+        "duplicate_threshold": DEFAULT_DUPLICATE_THRESHOLD,
+        "conflict_threshold": DEFAULT_CONFLICT_THRESHOLD,
+    }
+    rules_path = path or _rules_file()
+    if not rules_path.exists():
+        return defaults
+    raw = yaml.safe_load(rules_path.read_text()) or {}
+    cfg = raw.get("similarity", {})
+    return {
+        "duplicate_threshold": float(cfg.get("duplicate_threshold", defaults["duplicate_threshold"])),
+        "conflict_threshold": float(cfg.get("conflict_threshold", defaults["conflict_threshold"])),
+    }

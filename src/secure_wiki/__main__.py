@@ -39,7 +39,7 @@ from .models import SourceRef, TrustLevel
 from .read.hygiene import load_for_context
 from .store.embedding_store import EmbeddingStore
 from .store.wiki_store import WikiStore
-from .trust.tiering import assign_trust
+from .trust.tiering import assign_trust, load_similarity_config
 
 _LINE = "─" * 60
 _MAX_CHARS = 8_000  # extraction model context limit — keep input focused
@@ -175,6 +175,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     emb_store = EmbeddingStore(store)
     existing = store.load_claims()
     existing_embeddings = emb_store.load_all()
+    sim_cfg = load_similarity_config()
 
     # Pre-compute embeddings for all new claims in one pass; fall back gracefully
     try:
@@ -196,6 +197,8 @@ def cmd_ingest(args: argparse.Namespace) -> None:
             existing,
             new_embedding=new_embeddings.get(claim.claim_id),
             existing_embeddings=existing_embeddings or None,
+            duplicate_threshold=sim_cfg["duplicate_threshold"],
+            conflict_threshold=sim_cfg["conflict_threshold"],
         )
 
         if outcome.decision == GateDecision.COMMIT:

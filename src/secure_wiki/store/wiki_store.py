@@ -36,6 +36,13 @@ _TRUST_RULES_TEMPLATE = """\
 #       comment: "Internal knowledge base"
 
 rules: []
+
+# Gate 5 similarity thresholds (embedding-based duplicate/conflict detection).
+# duplicate_threshold: cosine similarity >= this → quarantine as duplicate
+# conflict_threshold:  cosine similarity >= this → escalate for human review
+similarity:
+  duplicate_threshold: 0.95
+  conflict_threshold: 0.85
 """
 
 _GIT_ENV = {
