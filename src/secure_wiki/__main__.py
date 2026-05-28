@@ -21,6 +21,14 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
+# Load .env from the working directory (or any parent) automatically so users
+# don't need to `source .env` before running the CLI.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from .extraction.extractor import extract_claims
 from .gate.write_gate import GateDecision, run_write_gate
 from .ingestion.sanitizer import sanitize
