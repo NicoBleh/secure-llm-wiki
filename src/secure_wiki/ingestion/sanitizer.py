@@ -1,11 +1,11 @@
-"""Sanitizing-Pass der Ingestion-Schicht (Spec 4.1).
+"""Sanitizing pass for the ingestion layer (Spec 4.1).
 
-Erkennt und flaggt typische Injection-Verschleierungsvektoren, BEVOR Quelltext
-ein Modell erreicht. Geflaggte Inhalte werden NICHT still verworfen, sondern
-protokolliert (forensisch relevant, Spec 4.1).
+Detects and flags common injection obfuscation vectors BEFORE source text
+reaches a model. Flagged content is NOT silently discarded but logged
+(forensically relevant, Spec 4.1).
 
-Status: TEILIMPLEMENTIERT. Die Erkennungsmuster sind funktionsfähig; die
-Integration ins Logging und die Anbindung an die Pipeline sind TODO.
+Status: PARTIALLY IMPLEMENTED. Detection patterns are functional; integration
+with structured logging and pipeline hookup are TODO.
 """
 from __future__ import annotations
 
@@ -14,15 +14,15 @@ import unicodedata
 from dataclasses import dataclass, field
 
 
-# Unsichtbare / gefährliche Unicode-Codepoints (Zero-Width, Bidi-Override).
+# Invisible / dangerous Unicode codepoints (zero-width, bidi-override).
 _INVISIBLE_CODEPOINTS = {
     "\u200b", "\u200c", "\u200d", "\ufeff",  # zero-width space/joiner/BOM
     "\u202a", "\u202b", "\u202c", "\u202d", "\u202e",  # bidi overrides
     "\u2066", "\u2067", "\u2068", "\u2069",  # isolates
 }
 
-# Heuristische Instruktionsmuster (Spec 4.1). Bewusst breit; false positives
-# werden geflaggt, nicht entfernt — die Entscheidung trifft eine spätere Stufe.
+# Heuristic instruction patterns (Spec 4.1). Intentionally broad; false positives
+# are flagged, not removed — the decision is made by a later stage.
 _INSTRUCTION_PATTERNS = [
     re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I),
     re.compile(r"disregard\s+(the\s+)?above", re.I),
@@ -41,7 +41,7 @@ _LONG_B64 = re.compile(r"\b[A-Za-z0-9+/]{120,}={0,2}\b")
 
 @dataclass
 class SanitizeReport:
-    """Ergebnis eines Sanitizing-Passes."""
+    """Result of a sanitizing pass."""
     cleaned_text: str
     flags: list[str] = field(default_factory=list)
 
@@ -51,21 +51,21 @@ class SanitizeReport:
 
 
 def sanitize(text: str) -> SanitizeReport:
-    """Normalisiert Text und flaggt Verschleierungsvektoren (Spec 4.1).
+    """Normalize text and flag obfuscation vectors (Spec 4.1).
 
-    Gibt den bereinigten Text plus eine Liste von Flags zurück. Entfernt
-    unsichtbare Zeichen, behält aber sichtbare verdächtige Muster bei und
-    flaggt sie nur — die Quelle bleibt für die spätere Verarbeitung lesbar.
+    Returns the cleaned text plus a list of flags. Removes invisible characters
+    but keeps visually suspicious patterns intact and only flags them — the
+    source remains readable for later processing stages.
     """
     flags: list[str] = []
 
-    # 1) Unsichtbare Codepoints entfernen + flaggen.
+    # 1) Remove and flag invisible codepoints.
     found_invisible = {c for c in text if c in _INVISIBLE_CODEPOINTS}
     if found_invisible:
         flags.append(f"invisible_chars:{len(found_invisible)}")
     cleaned = "".join(c for c in text if c not in _INVISIBLE_CODEPOINTS)
 
-    # 2) Sonstige Steuerzeichen (außer Whitespace) flaggen.
+    # 2) Flag other control characters (except whitespace).
     if any(unicodedata.category(c) == "Cc" and c not in "\t\n\r" for c in cleaned):
         flags.append("control_chars")
 
@@ -85,7 +85,7 @@ def sanitize(text: str) -> SanitizeReport:
     return SanitizeReport(cleaned_text=cleaned, flags=flags)
 
 
-# TODO(claude-code):
-#   - Flags an ein strukturiertes Audit-Log anbinden (Spec 4.1, "protokolliert").
-#   - Schwellenwert-Policy definieren: ab wann geht eine Quelle direkt in
-#     Quarantäne statt durch Extraction? (Designentscheidung dokumentieren.)
+# TODO:
+#   - Wire flags into a structured audit log (Spec 4.1, "logged").
+#   - Define threshold policy: at what point should a source go directly to
+#     quarantine instead of continuing through extraction? (Document the decision.)

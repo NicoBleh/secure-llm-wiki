@@ -1,10 +1,10 @@
-"""Zentrale Datenstrukturen für das Secure LLM-Wiki.
+"""Central data structures for the Secure LLM-Wiki.
 
-Dieses Modul definiert das Provenance-Schema (siehe Spec Abschnitt 6) als
-Single Source of Truth. Alle Pipeline-Schichten importieren von hier.
+This module defines the provenance schema (see Spec section 6) as the single
+source of truth. All pipeline layers import from here.
 
-Status: SKELETT. Felder und Validierung sind vollständig; Persistenz-Helfer
-sind als TODO markiert und von Claude Code zu implementieren.
+Status: COMPLETE. Fields and validation are fully implemented; persistence
+helpers live in store/wiki_store.py.
 """
 from __future__ import annotations
 
@@ -17,47 +17,47 @@ import uuid
 
 
 class TrustLevel(str, Enum):
-    """Vertrauensstufe einer Quelle bzw. eines Claims (Spec 4.3)."""
-    TRUSTED = "trusted"          # vom Nutzer kuratiert/verifiziert
-    SEMI_TRUSTED = "semi-trusted"  # etabliert, aber nicht einzeln geprüft
-    UNTRUSTED = "untrusted"      # beliebiger Web-Fund, agentisch gecrawlt
+    """Trust level of a source or claim (Spec 4.3)."""
+    TRUSTED = "trusted"            # curated/verified by the user
+    SEMI_TRUSTED = "semi-trusted"  # established source, not individually reviewed
+    UNTRUSTED = "untrusted"        # arbitrary web find, agentically crawled
 
     @classmethod
     def weakest(cls, levels: list["TrustLevel"]) -> "TrustLevel":
-        """Propagierungsregel: ein Claim erbt das SCHWÄCHSTE Level (Spec 4.3)."""
+        """Propagation rule: a claim inherits the WEAKEST level of its sources (Spec 4.3)."""
         order = [cls.TRUSTED, cls.SEMI_TRUSTED, cls.UNTRUSTED]
         return max(levels, key=order.index) if levels else cls.UNTRUSTED
 
 
 class ClaimStatus(str, Enum):
-    """Lebenszyklus-Status eines Claims (Spec 6)."""
-    ACTIVE = "active"          # committet, im Wiki sichtbar
-    PENDING = "pending"        # wartet auf Review/Bestätigung
-    QUARANTINED = "quarantined"  # Review nicht bestanden
-    SUPERSEDED = "superseded"  # durch neueren Claim ersetzt
+    """Lifecycle status of a claim (Spec 6)."""
+    ACTIVE = "active"            # committed, visible in the wiki
+    PENDING = "pending"          # awaiting review/confirmation
+    QUARANTINED = "quarantined"  # failed review
+    SUPERSEDED = "superseded"    # replaced by a newer claim
 
 
 @dataclass
 class SourceRef:
-    """Herkunftsreferenz eines Claims (Spec 6)."""
+    """Source reference for a claim (Spec 6)."""
     id: str
     uri: str
     section: str
-    content_hash: str  # sha256 des normalisierten Originalabschnitts
+    content_hash: str  # sha256 of the normalized original section
 
     @staticmethod
     def compute_hash(original_text: str) -> str:
-        """SHA-256 über den normalisierten Originaltext (Spec 7)."""
+        """SHA-256 over the normalized original text (Spec 7)."""
         normalized = " ".join(original_text.split())
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 @dataclass
 class Claim:
-    """Eine atomare, prüfbare Aussage mit vollständiger Provenance (Spec 6).
+    """An atomic, verifiable statement with full provenance (Spec 6).
 
-    Dies ist die zentrale Datenstruktur des gesamten Systems. Jede Pipeline-
-    Schicht reichert sie an, niemals wird Provenance entfernt.
+    This is the central data structure of the entire system. Every pipeline
+    stage enriches it; provenance is never removed.
     """
     text: str
     source: SourceRef

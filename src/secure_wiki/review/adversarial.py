@@ -28,12 +28,12 @@ def review_write(
     proposed: list[Claim],
     existing_high_trust: list[Claim] | None = None,
 ) -> ReviewResult:
-    """Prüft einen vorgeschlagenen Schreibvorgang (Spec 4.4).
+    """Review a proposed write operation (Spec 4.4).
 
-    existing_high_trust: bestehende hoch-vertraute Claims, gegen die auf
-    unbegründetes Überschreiben geprüft wird.
+    existing_high_trust: active high-trust claims checked against for
+    unjustified overwriting.
 
-    Fail-closed: blockiert, wenn die Modellantwort nicht parsebar ist.
+    Fail-closed: blocks if the model response cannot be parsed.
     """
     client = get_review_client()
 
