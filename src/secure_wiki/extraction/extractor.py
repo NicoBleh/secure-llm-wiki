@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from ..ingestion.prompts import build_extraction_prompt
+from ..prompts import build_extraction_prompt
 from ..llm_client import get_extraction_client, strip_fences
 from ..models import Claim, ClaimStatus, SourceRef, TrustLevel
 

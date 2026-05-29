@@ -36,6 +36,7 @@ from .gate.write_gate import GateDecision, run_write_gate
 from .ingestion.sanitizer import sanitize
 from .llm_client import get_embed_client, get_review_client
 from .models import SourceRef, TrustLevel
+from .prompts import QUERY_TASK_PROMPT
 from .read.hygiene import load_for_context
 from .store.embedding_store import EmbeddingStore
 from .store.wiki_store import WikiStore
@@ -227,14 +228,6 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     print()
 
 
-_QUERY_TASK_PROMPT = """\
-Answer the user's question using ONLY the evidence in the wiki context block \
-provided in the system prompt. Cite the source URI for each claim you use. \
-If the wiki does not contain enough information to answer, say so explicitly — \
-do not speculate beyond the evidence.\
-"""
-
-
 def cmd_query(args: argparse.Namespace) -> None:
     min_trust = TrustLevel(args.min_trust)
     ctx = load_for_context(min_trust=min_trust, include_pending=args.include_pending)
@@ -243,7 +236,7 @@ def cmd_query(args: argparse.Namespace) -> None:
         print(f"\n[query] Wiki is empty (min_trust={args.min_trust}). Run 'secure-wiki ingest' first.")
         sys.exit(1)
 
-    system = f"{ctx.system_note}\n\n{ctx.context_block}\n\n{_QUERY_TASK_PROMPT}"
+    system = f"{ctx.system_note}\n\n{ctx.context_block}\n\n{QUERY_TASK_PROMPT}"
     client = get_review_client()
 
     print(f"\n[query] {ctx.claim_count} claim(s) loaded (min_trust={args.min_trust})")
