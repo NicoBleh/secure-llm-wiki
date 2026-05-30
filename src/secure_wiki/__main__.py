@@ -123,10 +123,12 @@ def _strip_html(content: str) -> str:
 
 def _read_pdf(path: Path) -> str:
     """Extract plain text from a PDF file using pypdf."""
+    import logging
     try:
         from pypdf import PdfReader
     except ImportError:
         raise ImportError("PDF support requires pypdf: pip install pypdf")
+    logging.getLogger("pypdf").setLevel(logging.ERROR)
     reader = PdfReader(path)
     pages = [page.extract_text() or "" for page in reader.pages]
     return "\n\n".join(p.strip() for p in pages if p.strip())
@@ -297,9 +299,12 @@ def _run_pipeline(
 
     # 4. Extract claims
     with _spinner("[extract]  calling extraction model…"):
-        claims, extract_usage = extract_claims(source_text, source_ref, trust)
+        claims, extract_usage, parse_error = extract_claims(source_text, source_ref, trust)
     if not claims:
-        print("[extract]  no claims extracted — model returned empty or unparseable response")
+        if parse_error:
+            print(f"[extract]  no claims extracted — {parse_error}")
+        else:
+            print("[extract]  no claims extracted — model returned an empty list")
         return 0, 0, 0, extract_usage
     print(f"[extract]  {len(claims)} claim(s) extracted")
     print()

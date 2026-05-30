@@ -15,19 +15,28 @@ from ..llm_client import UsageInfo, get_extraction_client, strip_fences
 from ..models import Claim, ClaimStatus, SourceRef, TrustLevel
 
 
-def _parse_items(raw: str) -> list[dict]:
-    """Parse model output that may be a single JSON array or multiple arrays.
+def _parse_items(raw: str) -> tuple[list[dict], str | None]:
+    """Parse model output into a list of claim dicts.
 
-    Some models return one array per line instead of a single top-level array
-    despite the system prompt. This handles both forms.
+    Handles three formats models may return despite the system prompt:
+      1. Envelope object  {"nonce": "...", "claims": [...]}  (current prompt)
+      2. Plain array      [{...}, {...}]                     (legacy)
+      3. One JSON value per line                             (some Ollama models)
+
+    Returns (items, parse_error) where parse_error is a short diagnostic string
+    when nothing could be parsed, or None on success.
     """
     cleaned = strip_fences(raw)
 
-    # Fast path: well-formed single array
     try:
-        result = json.loads(cleaned)
-        if isinstance(result, list):
-            return result
+        parsed = json.loads(cleaned)
+        # Current format: envelope object with a "claims" key
+        if isinstance(parsed, dict) and "claims" in parsed:
+            items = parsed["claims"]
+            return (items if isinstance(items, list) else []), None
+        # Legacy format: bare array
+        if isinstance(parsed, list):
+            return parsed, None
     except json.JSONDecodeError:
         pass
 
@@ -38,28 +47,41 @@ def _parse_items(raw: str) -> list[dict]:
         if not line:
             continue
         try:
-            parsed = json.loads(line)
-            if isinstance(parsed, list):
-                items.extend(parsed)
-            elif isinstance(parsed, dict):
-                items.append(parsed)
+            obj = json.loads(line)
+            if isinstance(obj, dict) and "claims" in obj:
+                claims = obj["claims"]
+                if isinstance(claims, list):
+                    items.extend(claims)
+            elif isinstance(obj, list):
+                items.extend(obj)
+            elif isinstance(obj, dict):
+                items.append(obj)
         except json.JSONDecodeError:
             continue
-    return items
+
+    if not items:
+        preview = cleaned[:120].replace("\n", " ")
+        return [], f"unparseable response: {preview!r}"
+    return items, None
 
 
 def extract_claims(
     source_text: str,
     source_ref: SourceRef,
     trust_level: TrustLevel,
-) -> tuple[list[Claim], UsageInfo]:
-    """Extract atomic claims from source_text via the extraction LLM."""
+) -> tuple[list[Claim], UsageInfo, str | None]:
+    """Extract atomic claims from source_text via the extraction LLM.
+
+    Returns (claims, usage, parse_error). parse_error is None on success or a
+    short diagnostic string when the model response could not be parsed.
+    """
     client = get_extraction_client()
     system, user, _nonce = build_extraction_prompt(source_text)
     result = client.complete(system, user)
 
+    items, parse_error = _parse_items(result.text)
     claims = []
-    for item in _parse_items(result.text):
+    for item in items:
         if not isinstance(item, dict) or "text" not in item:
             continue
         claims.append(
@@ -70,4 +92,4 @@ def extract_claims(
                 status=ClaimStatus.PENDING,
             )
         )
-    return claims, result.usage
+    return claims, result.usage, parse_error

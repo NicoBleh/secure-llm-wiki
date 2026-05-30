@@ -90,7 +90,7 @@ class TestCmdIngest:
         source_file = CORPUS / "08_benign_control.txt"
         extracted = [_make_claim("Adversarial ML attacks target model training data.")]
 
-        with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo(100, 20))), \
+        with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo(100, 20), None)), \
              patch("secure_wiki.gate.write_gate.review_write",
                    return_value=__import__("secure_wiki.review.adversarial", fromlist=["ReviewResult"]).ReviewResult(passed=True, reasons=[])):
             cmd_ingest(_args(source=str(source_file)))
@@ -104,7 +104,7 @@ class TestCmdIngest:
         source_file = CORPUS / "01_direct_instruction.txt"
         extracted = [_make_claim("some claim from suspicious source")]
 
-        with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo())):
+        with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo(), None)):
             cmd_ingest(_args(source=str(source_file)))
 
         out = capsys.readouterr().out
@@ -115,7 +115,7 @@ class TestCmdIngest:
         monkeypatch.setenv("WIKI_DATA_PATH", str(tmp_path / "wiki"))
         source_file = CORPUS / "08_benign_control.txt"
 
-        with patch("secure_wiki.__main__.extract_claims", return_value=([], UsageInfo())), \
+        with patch("secure_wiki.__main__.extract_claims", return_value=([], UsageInfo(), "unparseable response: 'raw model output'")), \
              pytest.raises(SystemExit) as exc_info:
             cmd_ingest(_args(source=str(source_file)))
 
@@ -127,7 +127,7 @@ class TestCmdIngest:
         source_file = CORPUS / "08_benign_control.txt"
         extracted = [_make_claim("some claim")]
 
-        with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo())), \
+        with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo(), None)), \
              patch("secure_wiki.gate.write_gate.review_write",
                    return_value=__import__("secure_wiki.review.adversarial", fromlist=["ReviewResult"]).ReviewResult(passed=True, reasons=[])):
             cmd_ingest(_args(source=str(source_file), trust="trusted"))

@@ -24,6 +24,9 @@ class ReviewResult:
     reasons: list[str]
 
 
+_MAX_RETRIES = 2
+
+
 def review_write(
     proposed: list[Claim],
     existing_high_trust: list[Claim] | None = None,
@@ -33,7 +36,9 @@ def review_write(
     existing_high_trust: active high-trust claims checked against for
     unjustified overwriting.
 
-    Fail-closed: blocks if the model response cannot be parsed.
+    Retries up to _MAX_RETRIES times on unparseable responses before
+    failing closed — guards against flaky model output without weakening
+    security (a deliberate block still blocks on the first attempt).
     """
     client = get_review_client()
 
@@ -46,13 +51,16 @@ def review_write(
         existing_lines = "\n".join(f"- {c.text}" for c in existing_high_trust)
         user += f"\n\nEXISTING HIGH-TRUST CLAIMS:\n{existing_lines}"
 
-    raw = client.complete(REVIEW_SYSTEM_PROMPT, user).text
+    last_error = "review model returned unparseable response"
+    for attempt in range(1, _MAX_RETRIES + 2):
+        raw = client.complete(REVIEW_SYSTEM_PROMPT, user).text
+        try:
+            result = json.loads(extract_json_object(raw))
+            passed = result.get("verdict") == "pass"
+            reasons = result.get("reasons", [])
+            return ReviewResult(passed=passed, reasons=reasons)
+        except json.JSONDecodeError:
+            preview = raw[:80].replace("\n", " ")
+            last_error = f"review model returned unparseable response (attempt {attempt}): {preview!r}"
 
-    try:
-        result = json.loads(extract_json_object(raw))
-        passed = result.get("verdict") == "pass"
-        reasons = result.get("reasons", [])
-    except json.JSONDecodeError:
-        return ReviewResult(passed=False, reasons=["review model returned unparseable response"])
-
-    return ReviewResult(passed=passed, reasons=reasons)
+    return ReviewResult(passed=False, reasons=[last_error])
