@@ -17,6 +17,7 @@ The root defaults to ./wiki_data/ or $WIKI_DATA_PATH if set.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -153,6 +154,74 @@ class WikiStore:
     def load_quarantined(self) -> list[Claim]:
         """Load all claims from quarantine/."""
         return self._load_dir(self.quarantine, status=None)
+
+    # ------------------------------------------------------------------
+    # Deletes
+    # ------------------------------------------------------------------
+
+    def delete_quarantine(self) -> list[str]:
+        """Remove all files from quarantine/ and commit. Returns deleted claim IDs."""
+        return self._delete_dir(self.quarantine, "clear quarantine")
+
+    def delete_by_trust(self, trust_level: str) -> list[str]:
+        """Remove all claims (pages + quarantine) matching trust_level and commit."""
+        deleted: list[str] = []
+        for directory in (self.pages, self.quarantine):
+            for path in sorted(directory.glob("*.md")):
+                try:
+                    claim = _deserialize(path)
+                    if claim.trust_level.value == trust_level:
+                        path.unlink()
+                        deleted.append(claim.claim_id)
+                except Exception:
+                    pass
+        if deleted:
+            _git(["add", "-A"], self.root)
+            _git(["commit", "-m", f"clear {trust_level} claims ({len(deleted)} removed)"], self.root)
+        return deleted
+
+    def reset(self, keep_history: bool = False) -> int:
+        """Remove all claims from pages/ and quarantine/.
+
+        keep_history=False (default): delete and re-init the git repo so no
+        claim content survives in the history.
+        keep_history=True: commit a removal on top of the existing history.
+        """
+        # Count before we delete anything
+        total = len(list(self.pages.glob("*.md"))) + len(list(self.quarantine.glob("*.md")))
+
+        if keep_history:
+            self._delete_dir(self.pages, commit=False)
+            self._delete_dir(self.quarantine, commit=False)
+            if total:
+                _git(["add", "-A"], self.root)
+                _git(["commit", "-m", f"reset wiki — removed all {total} claims"], self.root)
+        else:
+            # Preserve trust_rules.yaml, then wipe and re-init
+            rules_path = self.root / "trust_rules.yaml"
+            rules_backup = rules_path.read_text(encoding="utf-8") if rules_path.exists() else None
+            shutil.rmtree(self.root)
+            self.root.mkdir(parents=True)
+            if rules_backup is not None:
+                rules_path.write_text(rules_backup, encoding="utf-8")
+            self.init()
+
+        return total
+
+    def _delete_dir(self, directory: Path, message: str = "", commit: bool = True) -> list[str]:
+        """Delete all .md files in directory, optionally committing. Returns claim IDs."""
+        deleted: list[str] = []
+        for path in sorted(directory.glob("*.md")):
+            try:
+                claim = _deserialize(path)
+                deleted.append(claim.claim_id)
+            except Exception:
+                pass
+            path.unlink()
+        if deleted and commit:
+            _git(["add", "-A"], self.root)
+            _git(["commit", "-m", message or f"removed {len(deleted)} claims"], self.root)
+        return deleted
 
     # ------------------------------------------------------------------
     # Internals

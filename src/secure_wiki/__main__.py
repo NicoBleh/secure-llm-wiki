@@ -484,6 +484,73 @@ def cmd_context(args: argparse.Namespace) -> None:
     print()
 
 
+def _confirm(prompt: str) -> bool:
+    """Ask for y/N confirmation. Returns True only on explicit 'y'."""
+    try:
+        return input(f"{prompt} [y/N] ").strip().lower() == "y"
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
+def cmd_clear(args: argparse.Namespace) -> None:
+    store = WikiStore()
+    emb_store = EmbeddingStore(store)
+
+    if args.quarantine:
+        count = len(store.load_quarantined())
+        if count == 0:
+            print("\n[clear] Quarantine is already empty.")
+            return
+        print(f"\n[clear] This will permanently delete {count} quarantined claim(s).")
+        if not _confirm("[clear] Proceed?"):
+            print("[clear] Aborted.")
+            return
+        deleted = store.delete_quarantine()
+        for cid in deleted:
+            emb_store.delete(cid)
+        print(f"[clear] Removed {len(deleted)} quarantined claim(s).")
+
+    elif args.trust:
+        all_claims = store.load_claims(status=None) + store.load_quarantined()
+        matching = [c for c in all_claims if c.trust_level.value == args.trust]
+        if not matching:
+            print(f"\n[clear] No claims with trust level '{args.trust}' found.")
+            return
+        print(f"\n[clear] This will permanently delete {len(matching)} '{args.trust}' claim(s)"
+              f" from pages and quarantine.")
+        if not _confirm("[clear] Proceed?"):
+            print("[clear] Aborted.")
+            return
+        deleted = store.delete_by_trust(args.trust)
+        for cid in deleted:
+            emb_store.delete(cid)
+        print(f"[clear] Removed {len(deleted)} claim(s).")
+
+    elif args.reset:
+        total = len(store.load_claims(status=None)) + len(store.load_quarantined())
+        keep = getattr(args, "keep_history", False)
+        if total == 0:
+            print("\n[clear] Wiki is already empty.")
+            return
+        print(f"\n[clear] FULL RESET — permanently deletes ALL {total} claim(s) (pages + quarantine).")
+        if keep:
+            print("[clear] Git history will be preserved (--keep-history).")
+        else:
+            print("[clear] Git repo will be wiped and re-initialized — history gone.")
+        print("[clear] trust_rules.yaml is always preserved.")
+        if not _confirm("[clear] Proceed?"):
+            print("[clear] Aborted.")
+            return
+        removed = store.reset(keep_history=keep)
+        emb_store.delete_all()
+        print(f"[clear] Wiki reset — {removed} claim(s) removed.")
+
+    else:
+        print("\n[clear] Specify one of: --quarantine, --trust <level>, --reset")
+        sys.exit(1)
+
+
 def cmd_list(args: argparse.Namespace) -> None:
     store = WikiStore()
     if args.quarantine:
@@ -571,6 +638,28 @@ def main() -> None:
     list_p = sub.add_parser("list", help="List wiki claims")
     list_p.add_argument("--quarantine", action="store_true", help="Show quarantined claims")
 
+    # clear
+    clear_p = sub.add_parser("clear", help="Delete claims from the wiki")
+    clear_grp = clear_p.add_mutually_exclusive_group(required=True)
+    clear_grp.add_argument(
+        "--quarantine", action="store_true",
+        help="Delete all quarantined claims",
+    )
+    clear_grp.add_argument(
+        "--trust",
+        choices=["trusted", "semi-trusted", "untrusted"],
+        metavar="LEVEL",
+        help="Delete all claims at this trust level (pages + quarantine)",
+    )
+    clear_grp.add_argument(
+        "--reset", action="store_true",
+        help="Full reset — wipes git repo and all claims (trust_rules.yaml preserved)",
+    )
+    clear_p.add_argument(
+        "--keep-history", action="store_true",
+        help="With --reset: commit removal instead of wiping the git repo",
+    )
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -583,6 +672,8 @@ def main() -> None:
         cmd_context(args)
     elif args.command == "list":
         cmd_list(args)
+    elif args.command == "clear":
+        cmd_clear(args)
     else:
         parser.print_help()
 

@@ -130,6 +130,12 @@ secure-wiki query --min-trust trusted            # skip the startup prompt
 # Print the raw nonce-delimited context block (for piping into other tools)
 secure-wiki context
 secure-wiki context --min-trust trusted
+
+# Delete claims (all options ask for confirmation before proceeding)
+secure-wiki clear --quarantine                   # remove all quarantined claims
+secure-wiki clear --trust untrusted              # remove all claims at a trust level (pages + quarantine)
+secure-wiki clear --reset                        # full reset — wipes git repo and all claims (trust_rules.yaml preserved)
+secure-wiki clear --reset --keep-history         # same but commits removal instead of wiping the repo
 ```
 
 ### Supported input formats

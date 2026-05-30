@@ -47,3 +47,7 @@ class EmbeddingStore:
         path = self._dir / f"{claim_id}.json"
         if path.exists():
             path.unlink()
+
+    def delete_all(self) -> None:
+        for path in self._dir.glob("*.json"):
+            path.unlink()
