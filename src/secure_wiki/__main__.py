@@ -49,6 +49,7 @@ from .trust.tiering import assign_trust, load_similarity_config
 
 _LINE = "─" * 60
 _MAX_CHARS = 8_000  # extraction model context limit — keep input focused
+_SUPPORTED_EXTENSIONS = {".txt", ".md", ".html", ".htm", ".rst", ".csv", ".pdf"}
 _SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
@@ -120,11 +121,22 @@ def _strip_html(content: str) -> str:
     return stripper.get_text()
 
 
+def _read_pdf(path: Path) -> str:
+    """Extract plain text from a PDF file using pypdf."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        raise ImportError("PDF support requires pypdf: pip install pypdf")
+    reader = PdfReader(path)
+    pages = [page.extract_text() or "" for page in reader.pages]
+    return "\n\n".join(p.strip() for p in pages if p.strip())
+
+
 def _read_source(source: str) -> tuple[str, str]:
     """Return (text, uri) from a file path or HTTP URL.
 
-    HTML content is stripped to plain text before returning. Content is
-    truncated to _MAX_CHARS so the extraction model receives a focused input.
+    HTML content is stripped to plain text; PDFs are extracted via pypdf.
+    Content is truncated to _MAX_CHARS so the extraction model stays focused.
     """
     if source.startswith(("http://", "https://")):
         import urllib.request
@@ -135,7 +147,10 @@ def _read_source(source: str) -> tuple[str, str]:
             raw = _strip_html(raw)
         return raw[:_MAX_CHARS], source
     path = Path(source)
-    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".pdf":
+        text = _read_pdf(path)
+    else:
+        text = path.read_text(encoding="utf-8")
     return text[:_MAX_CHARS], f"file://{path.resolve()}"
 
 
@@ -150,6 +165,75 @@ def _source_id(source: str) -> str:
         slug = parsed.path.rstrip("/").rsplit("/", 1)[-1] or parsed.netloc
         return f"{parsed.netloc}/{slug}"
     return Path(source).stem
+
+
+def _prompt_trust(detected: "TrustLevel", domain: str) -> "TrustLevel":
+    """Show the auto-detected trust level and let the user confirm or override it.
+
+    Skips the prompt when stdin is not a TTY (e.g. piped/scripted ingestion).
+    """
+    _SHORT = {"t": TrustLevel.TRUSTED, "s": TrustLevel.SEMI_TRUSTED, "u": TrustLevel.UNTRUSTED}
+    _LABELS = {
+        TrustLevel.TRUSTED: "trusted",
+        TrustLevel.SEMI_TRUSTED: "semi-trusted",
+        TrustLevel.UNTRUSTED: "untrusted",
+    }
+
+    print(f"[trust]    {detected.value}  ({domain})")
+
+    if not sys.stdin.isatty():
+        return detected
+
+    print("           How trustworthy is this source?")
+    print("           [t] trusted   [s] semi-trusted   [u] untrusted   [Enter] keep")
+    try:
+        raw = input("           > ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return detected
+
+    chosen = _SHORT.get(raw, detected)
+    if chosen != detected:
+        print(f"[trust]    overridden → {_LABELS[chosen]}")
+    return chosen
+
+
+def _prompt_min_trust(default: "TrustLevel") -> "TrustLevel":
+    """Ask which minimum trust level to load for a query session.
+
+    Skips the prompt when stdin is not a TTY.
+    """
+    _SHORT = {"t": TrustLevel.TRUSTED, "s": TrustLevel.SEMI_TRUSTED, "u": TrustLevel.UNTRUSTED}
+    _LABELS = {
+        TrustLevel.TRUSTED: "trusted",
+        TrustLevel.SEMI_TRUSTED: "semi-trusted",
+        TrustLevel.UNTRUSTED: "untrusted",
+    }
+
+    if not sys.stdin.isatty():
+        return default
+
+    print(f"\n[query] Minimum trust level to include?")
+    print(f"        [t] trusted   [s] semi-trusted   [u] untrusted   [Enter] {default.value}")
+    try:
+        raw = input("        > ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+
+    chosen = _SHORT.get(raw, default)
+    if chosen != default:
+        print(f"[query] overridden → {_LABELS[chosen]}")
+    return chosen
+
+
+def _collect_files(folder: Path, recursive: bool = False) -> list[Path]:
+    """Return sorted list of files with supported extensions in folder."""
+    pattern = "**/*" if recursive else "*"
+    return sorted(
+        f for f in folder.glob(pattern)
+        if f.is_file() and f.suffix.lower() in _SUPPORTED_EXTENSIONS
+    )
 
 
 def _preview(text: str, max_len: int = 72) -> str:
@@ -170,16 +254,31 @@ def cmd_init(args: argparse.Namespace) -> None:
         print(f"Wiki repo initialized at {store.root.resolve()}")
 
 
-def cmd_ingest(args: argparse.Namespace) -> None:
-    print(f"\nIngesting: {args.source}")
-    print(_LINE)
+def _run_pipeline(
+    source: str,
+    trust: TrustLevel,
+    source_id_override: str | None,
+    section: str,
+    store: WikiStore,
+    emb_store: EmbeddingStore,
+    existing: list,
+    existing_embeddings: dict,
+    sim_cfg: dict,
+) -> tuple[int, int, int, UsageInfo]:
+    """Run steps 1–6 of the ingest pipeline for a single source.
 
+    Mutates *existing* and *existing_embeddings* in place so subsequent files
+    in a folder run benefit from duplicate/conflict detection against all
+    already-processed claims.
+
+    Returns (committed, quarantined, escalated, usage).
+    """
     # 1. Read source
     try:
-        source_text, uri = _read_source(args.source)
+        source_text, uri = _read_source(source)
     except Exception as exc:
         print(f"[error]    could not read source: {exc}")
-        sys.exit(1)
+        return 0, 0, 0, UsageInfo()
 
     # 2. Sanitize
     report = sanitize(source_text)
@@ -188,36 +287,24 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     else:
         print("[sanitize] clean")
 
-    # 3. Trust
-    trust = TrustLevel(args.trust) if args.trust else assign_trust(uri)
-    note = "(manual override)" if args.trust else f"({_domain(uri)})"
-    print(f"[trust]    {trust.value}  {note}")
-
-    # 4. Build source ref
+    # 3. Build source ref
     source_ref = SourceRef(
-        id=args.source_id or _source_id(args.source),
+        id=source_id_override or _source_id(source),
         uri=uri,
-        section=args.section,
+        section=section,
         content_hash=SourceRef.compute_hash(source_text),
     )
 
-    # 5. Extract claims
+    # 4. Extract claims
     with _spinner("[extract]  calling extraction model…"):
         claims, extract_usage = extract_claims(source_text, source_ref, trust)
     if not claims:
         print("[extract]  no claims extracted — model returned empty or unparseable response")
-        sys.exit(0)
+        return 0, 0, 0, extract_usage
     print(f"[extract]  {len(claims)} claim(s) extracted")
     print()
 
-    # 6. Gate + store each claim
-    store = WikiStore()
-    emb_store = EmbeddingStore(store)
-    existing = store.load_claims()
-    existing_embeddings = emb_store.load_all()
-    sim_cfg = load_similarity_config()
-
-    # Pre-compute embeddings for all new claims in one pass; fall back gracefully
+    # 5. Embeddings
     try:
         embed_client = get_embed_client()
         new_embeddings = {c.claim_id: embed_client.embed(c.text) for c in claims}
@@ -226,6 +313,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         print(f"[embed]    unavailable ({exc}), Gate 5 falls back to section heuristic")
         new_embeddings = {}
 
+    # 6. Gate + store
     committed = quarantined = escalated = 0
     width = len(f"[gate {len(claims)}/{len(claims)}]") + 2
 
@@ -258,28 +346,110 @@ def cmd_ingest(args: argparse.Namespace) -> None:
             escalated += 1
             print(f"{label} ESCALATE    {outcome.detail}")
 
-    print()
-    print(_LINE)
-    print(f"  committed:   {committed}")
-    print(f"  quarantined: {quarantined}")
-    if escalated:
-        print(f"  escalated:   {escalated}  <- human review required")
-    print(f"  tokens:      {extract_usage.input_tokens} in / {extract_usage.output_tokens} out")
-    print()
+    return committed, quarantined, escalated, extract_usage
+
+
+def cmd_ingest(args: argparse.Namespace) -> None:
+    # Resolve sources — single file/URL or an entire folder
+    is_url = args.source.startswith(("http://", "https://"))
+    source_path = Path(args.source) if not is_url else None
+
+    if source_path and source_path.is_dir():
+        files = _collect_files(source_path, recursive=getattr(args, "recursive", False))
+        if not files:
+            print(f"\n[error]    no supported files found in {source_path}")
+            print(f"           supported extensions: {', '.join(sorted(_SUPPORTED_EXTENSIONS))}")
+            sys.exit(1)
+        sources = [str(f) for f in files]
+        print(f"\nIngesting folder: {source_path.resolve()}  ({len(sources)} file(s))")
+        print(_LINE)
+        if args.trust:
+            trust = TrustLevel(args.trust)
+            print(f"[trust]    {trust.value}  (manual override)")
+        else:
+            trust = assign_trust(str(source_path))
+            trust = _prompt_trust(trust, str(source_path.name))
+    else:
+        sources = [args.source]
+        trust = None  # resolved per-source below
+
+    # Shared wiki state — kept across files so cross-file duplicate detection works
+    store = WikiStore()
+    emb_store = EmbeddingStore(store)
+    existing = store.load_claims()
+    existing_embeddings = emb_store.load_all()
+    sim_cfg = load_similarity_config()
+
+    is_folder = len(sources) > 1
+    total_committed = total_quarantined = total_escalated = 0
+    total_usage = UsageInfo()
+
+    for idx, source in enumerate(sources, 1):
+        if is_folder:
+            print(f"\n  [{idx}/{len(sources)}] {Path(source).name}")
+        else:
+            print(f"\nIngesting: {source}")
+        print(_LINE)
+
+        # Trust — already set for folders; resolve per-source for single ingests
+        if trust is None:
+            uri_hint = source if is_url else f"file://{Path(source).resolve()}"
+            if args.trust:
+                file_trust = TrustLevel(args.trust)
+                print(f"[trust]    {file_trust.value}  (manual override)")
+            else:
+                file_trust = assign_trust(uri_hint)
+                file_trust = _prompt_trust(file_trust, _domain(uri_hint))
+        else:
+            file_trust = trust
+
+        c, q, e, usage = _run_pipeline(
+            source, file_trust,
+            args.source_id if not is_folder else None,
+            args.section,
+            store, emb_store, existing, existing_embeddings, sim_cfg,
+        )
+        total_committed += c
+        total_quarantined += q
+        total_escalated += e
+        total_usage = total_usage + usage
+
+        if not is_folder:
+            if c + q + e == 0:
+                sys.exit(0)
+            print()
+            print(_LINE)
+            print(f"  committed:   {c}")
+            print(f"  quarantined: {q}")
+            if e:
+                print(f"  escalated:   {e}  <- human review required")
+            print(f"  tokens:      {usage.input_tokens} in / {usage.output_tokens} out")
+            print()
+
+    if is_folder:
+        print()
+        print(_LINE)
+        print(f"  files:       {len(sources)}")
+        print(f"  committed:   {total_committed}")
+        print(f"  quarantined: {total_quarantined}")
+        if total_escalated:
+            print(f"  escalated:   {total_escalated}  <- human review required")
+        print(f"  tokens:      {total_usage.input_tokens} in / {total_usage.output_tokens} out")
+        print()
 
 
 def cmd_query(args: argparse.Namespace) -> None:
-    min_trust = TrustLevel(args.min_trust)
+    min_trust = _prompt_min_trust(TrustLevel(args.min_trust))
     ctx = load_for_context(min_trust=min_trust, include_pending=args.include_pending)
 
     if ctx.claim_count == 0:
-        print(f"\n[query] Wiki is empty (min_trust={args.min_trust}). Run 'secure-wiki ingest' first.")
+        print(f"\n[query] Wiki is empty (min_trust={min_trust.value}). Run 'secure-wiki ingest' first.")
         sys.exit(1)
 
     system = f"{ctx.system_note}\n\n{ctx.context_block}\n\n{QUERY_TASK_PROMPT}"
     client = get_review_client()
 
-    print(f"\n[query] {ctx.claim_count} claim(s) loaded (min_trust={args.min_trust})")
+    print(f"\n[query] {ctx.claim_count} claim(s) loaded (min_trust={min_trust.value})")
     print("[query] Type 'exit' to quit.")
     print(_LINE)
 
@@ -364,6 +534,10 @@ def main() -> None:
     )
     ingest_p.add_argument("--source-id", help="Human-readable identifier for this source")
     ingest_p.add_argument("--section", default="full", help="Section label (default: full)")
+    ingest_p.add_argument(
+        "--recursive", action="store_true",
+        help="When source is a folder, also scan sub-folders",
+    )
 
     # query
     query_p = sub.add_parser("query", help="Open an interactive wiki Q&A session")
