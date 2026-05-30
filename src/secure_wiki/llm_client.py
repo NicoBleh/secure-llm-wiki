@@ -13,6 +13,29 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass, field
+
+
+@dataclass
+class UsageInfo:
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def __add__(self, other: "UsageInfo") -> "UsageInfo":
+        return UsageInfo(
+            self.input_tokens + other.input_tokens,
+            self.output_tokens + other.output_tokens,
+        )
+
+
+@dataclass
+class CompletionResult:
+    text: str
+    usage: UsageInfo = field(default_factory=UsageInfo)
 
 
 def strip_fences(text: str) -> str:
@@ -67,7 +90,7 @@ class OllamaClient:
         self._client = ollama.Client(host=host)
         self._model = model
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str) -> CompletionResult:
         response = self._client.chat(
             model=self._model,
             messages=[
@@ -76,7 +99,11 @@ class OllamaClient:
             ],
             options={"temperature": 0},
         )
-        return response.message.content
+        usage = UsageInfo(
+            input_tokens=getattr(response, "prompt_eval_count", 0) or 0,
+            output_tokens=getattr(response, "eval_count", 0) or 0,
+        )
+        return CompletionResult(text=response.message.content, usage=usage)
 
     def embed(self, text: str) -> list[float]:
         response = self._client.embed(model=self._model, input=text)
@@ -89,14 +116,18 @@ class AnthropicClient:
         self._client = anthropic.Anthropic()
         self._model = model
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str) -> CompletionResult:
         msg = self._client.messages.create(
             model=self._model,
             max_tokens=2048,
             system=system,
             messages=[{"role": "user", "content": user}],
         )
-        return msg.content[0].text
+        usage = UsageInfo(
+            input_tokens=msg.usage.input_tokens,
+            output_tokens=msg.usage.output_tokens,
+        )
+        return CompletionResult(text=msg.content[0].text, usage=usage)
 
     def embed(self, text: str) -> list[float]:
         raise NotImplementedError("Anthropic provider does not support embeddings; set LLM_PROVIDER=ollama for Gate 5 similarity checks")

@@ -1,8 +1,6 @@
 """Tests for trust-tiering (Spec 4.3)."""
 from __future__ import annotations
 
-import pytest
-
 from secure_wiki.models import TrustLevel
 from secure_wiki.trust.tiering import TrustRegistry, assign_trust
 

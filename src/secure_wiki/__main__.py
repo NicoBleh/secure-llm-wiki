@@ -17,8 +17,12 @@ Usage after install:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import itertools
 import re
 import sys
+import threading
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -32,6 +36,7 @@ except ImportError:
     pass
 
 from .extraction.extractor import extract_claims
+from .llm_client import UsageInfo
 from .gate.write_gate import GateDecision, run_write_gate
 from .ingestion.sanitizer import sanitize
 from .llm_client import get_embed_client, get_review_client
@@ -44,6 +49,40 @@ from .trust.tiering import assign_trust, load_similarity_config
 
 _LINE = "─" * 60
 _MAX_CHARS = 8_000  # extraction model context limit — keep input focused
+_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+@contextlib.contextmanager
+def _spinner(message: str):
+    """Animate a spinner beside *message* while the body executes.
+
+    Skips animation when stdout is not a TTY (piped output stays clean).
+    """
+    if not sys.stdout.isatty():
+        sys.stdout.write(f"{message}\n")
+        sys.stdout.flush()
+        yield
+        return
+
+    stop = threading.Event()
+
+    def _spin() -> None:
+        for frame in itertools.cycle(_SPINNER_FRAMES):
+            if stop.is_set():
+                break
+            sys.stdout.write(f"\r{frame} {message}")
+            sys.stdout.flush()
+            time.sleep(0.08)
+
+    t = threading.Thread(target=_spin, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join()
+        sys.stdout.write(f"\r  {message}\n")
+        sys.stdout.flush()
 
 
 class _HtmlStripper(HTMLParser):
@@ -163,8 +202,8 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     )
 
     # 5. Extract claims
-    print("[extract]  calling extraction model…")
-    claims = extract_claims(source_text, source_ref, trust)
+    with _spinner("[extract]  calling extraction model…"):
+        claims, extract_usage = extract_claims(source_text, source_ref, trust)
     if not claims:
         print("[extract]  no claims extracted — model returned empty or unparseable response")
         sys.exit(0)
@@ -225,6 +264,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     print(f"  quarantined: {quarantined}")
     if escalated:
         print(f"  escalated:   {escalated}  <- human review required")
+    print(f"  tokens:      {extract_usage.input_tokens} in / {extract_usage.output_tokens} out")
     print()
 
 
@@ -253,9 +293,12 @@ def cmd_query(args: argparse.Namespace) -> None:
             break
         if not question:
             continue
-        answer = client.complete(system, question)
+        with _spinner("thinking…"):
+            result = client.complete(system, question)
         print()
-        print(answer)
+        print(result.text)
+        u = result.usage
+        print(f"\n[tokens] {u.input_tokens} in / {u.output_tokens} out  (total {u.total_tokens})")
 
 
 def cmd_context(args: argparse.Namespace) -> None:

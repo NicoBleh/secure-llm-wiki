@@ -46,7 +46,7 @@ def review_write(
         existing_lines = "\n".join(f"- {c.text}" for c in existing_high_trust)
         user += f"\n\nEXISTING HIGH-TRUST CLAIMS:\n{existing_lines}"
 
-    raw = client.complete(REVIEW_SYSTEM_PROMPT, user)
+    raw = client.complete(REVIEW_SYSTEM_PROMPT, user).text
 
     try:
         result = json.loads(extract_json_object(raw))

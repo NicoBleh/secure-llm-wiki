@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from ..prompts import build_extraction_prompt
-from ..llm_client import get_extraction_client, strip_fences
+from ..llm_client import UsageInfo, get_extraction_client, strip_fences
 from ..models import Claim, ClaimStatus, SourceRef, TrustLevel
 
 
@@ -52,14 +52,14 @@ def extract_claims(
     source_text: str,
     source_ref: SourceRef,
     trust_level: TrustLevel,
-) -> list[Claim]:
+) -> tuple[list[Claim], UsageInfo]:
     """Extract atomic claims from source_text via the extraction LLM."""
     client = get_extraction_client()
     system, user, _nonce = build_extraction_prompt(source_text)
-    raw = client.complete(system, user)
+    result = client.complete(system, user)
 
     claims = []
-    for item in _parse_items(raw):
+    for item in _parse_items(result.text):
         if not isinstance(item, dict) or "text" not in item:
             continue
         claims.append(
@@ -70,4 +70,4 @@ def extract_claims(
                 status=ClaimStatus.PENDING,
             )
         )
-    return claims
+    return claims, result.usage
