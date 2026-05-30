@@ -42,12 +42,12 @@ secure-llm-wiki/
 ├── environment.yml              # Conda environment (Python 3.10+)
 ├── .env.example                 # LLM and wiki path config template
 ├── src/secure_wiki/
-│   ├── __main__.py              # CLI: ingest · list · context · init ✅
+│   ├── __main__.py              # CLI: ingest · list · context · query · init ✅
 │   ├── models.py                # Claim / SourceRef / TrustLevel — provenance schema ✅
-│   ├── llm_client.py            # Ollama + Anthropic provider abstraction ✅
+│   ├── llm_client.py            # Ollama + Anthropic provider abstraction, token usage ✅
+│   ├── prompts.py               # All system prompts, nonce-delimiter builders ✅
 │   ├── ingestion/
-│   │   ├── sanitizer.py         # Zero-width, bidi, HTML, base64, instruction patterns ✅
-│   │   └── prompts.py           # Nonce-delimiters + data/instruction separation ✅
+│   │   └── sanitizer.py         # Zero-width, bidi, HTML, base64, instruction patterns ✅
 │   ├── extraction/
 │   │   └── extractor.py         # Claim extraction via LLM, fail-closed JSON parsing ✅
 │   ├── trust/
@@ -57,7 +57,8 @@ secure-llm-wiki/
 │   ├── gate/
 │   │   └── write_gate.py        # 5-gate orchestration: commit / quarantine / escalate ✅
 │   ├── store/
-│   │   └── wiki_store.py        # Separate git repo, Markdown + frontmatter, roundtrip ✅
+│   │   ├── wiki_store.py        # Separate git repo, Markdown + frontmatter, roundtrip ✅
+│   │   └── embedding_store.py   # Claim embeddings for Gate 5 semantic similarity ✅
 │   └── read/
 │       └── hygiene.py           # Nonce-delimited context loading with trust metadata ✅
 ├── tests/
@@ -100,13 +101,18 @@ pytest -q
 # Initialize the wiki data repository
 secure-wiki init
 
-# Ingest a local file through the full pipeline
+# Ingest a single file (interactive trust prompt when --trust is omitted)
 secure-wiki ingest path/to/document.txt
+secure-wiki ingest path/to/paper.pdf
 
-# Ingest a URL (trust level auto-detected from domain)
+# Ingest a URL (trust level auto-detected from domain, then confirmed interactively)
 secure-wiki ingest https://attack.mitre.org/techniques/T1059
 
-# Override trust level manually
+# Ingest an entire folder (trust prompted once for the whole batch)
+secure-wiki ingest path/to/docs/
+secure-wiki ingest path/to/docs/ --recursive     # include sub-folders
+
+# Override trust level manually (skips the interactive prompt)
 secure-wiki ingest report.txt --trust semi-trusted --source-id vendor-advisory-2026
 
 # List committed claims
@@ -115,14 +121,24 @@ secure-wiki list
 # List quarantined claims (blocked by a gate)
 secure-wiki list --quarantine
 
-# Open an interactive Q&A session against the wiki (type 'exit' to quit)
+# Open an interactive Q&A session against the wiki
+# Prompts for minimum trust level at startup; type 'exit' to quit
+# Token usage (input / output) is shown after each answer
 secure-wiki query
-secure-wiki query --min-trust trusted
+secure-wiki query --min-trust trusted            # skip the startup prompt
 
 # Print the raw nonce-delimited context block (for piping into other tools)
 secure-wiki context
 secure-wiki context --min-trust trusted
 ```
+
+### Supported input formats
+
+| Format | Extensions |
+|---|---|
+| Plain text | `.txt`, `.md`, `.rst`, `.csv` |
+| HTML | `.html`, `.htm` (tags and scripts stripped automatically) |
+| PDF | `.pdf` (text extracted via pypdf) |
 
 ## LLM configuration
 
@@ -131,9 +147,13 @@ secure-wiki context --min-trust trusted
 | `LLM_PROVIDER` | `ollama` | `ollama` or `anthropic` |
 | `EXTRACTION_MODEL` | `llama3.1:8b` | Model for claim extraction |
 | `REVIEW_MODEL` | `mistral` | Model for adversarial review — **use a different model** to preserve 4-eyes independence |
+| `EMBED_MODEL` | `nomic-embed-text` | Model for Gate 5 semantic similarity (Ollama only) |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
 | `ANTHROPIC_API_KEY` | — | Required only for `LLM_PROVIDER=anthropic` |
 | `WIKI_DATA_PATH` | `./wiki_data/` | Path to the wiki data git repository |
+
+Token usage (input and output tokens) is reported after every LLM call — in the ingest
+summary and after each query answer.
 
 The test suite runs without any LLM connection — all model calls are mocked.
 
@@ -154,6 +174,9 @@ Extraction and review use **different models** by default (`llama3.1:8b` and `mi
 
 ### Fail-closed
 Unparseable LLM responses are treated as failures — empty extraction returns no claims, unparseable review verdict blocks the write. The system never silently passes bad output.
+
+### Adversarial review tuning
+The review prompt distinguishes between genuine injection (text that addresses the AI model to change its behavior) and legitimate technical content (code examples, API docs, function references). This prevents false positives on programming documentation while keeping the guard against rule-manipulation attempts and trust-policy overrides.
 
 ## Red-teaming & portfolio
 
