@@ -139,7 +139,7 @@ _EXTRACTION_DEFAULTS: dict[str, str] = {
 }
 _REVIEW_DEFAULTS: dict[str, str] = {
     "ollama": "mistral",
-    "anthropic": "claude-haiku-4-5-20251001",
+    "anthropic": "claude-sonnet-4-6",
 }
 _EMBED_DEFAULTS: dict[str, str] = {
     "ollama": "nomic-embed-text",

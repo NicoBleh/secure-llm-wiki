@@ -152,7 +152,7 @@ secure-wiki clear --reset --keep-history         # same but commits removal inst
 |---|---|---|
 | `LLM_PROVIDER` | `ollama` | `ollama` or `anthropic` |
 | `EXTRACTION_MODEL` | `llama3.1:8b` | Model for claim extraction |
-| `REVIEW_MODEL` | `mistral` | Model for adversarial review — **use a different model** to preserve 4-eyes independence |
+| `REVIEW_MODEL` | `mistral` / `claude-sonnet-4-6` | Model for adversarial review — **must differ from EXTRACTION_MODEL** to preserve 4-eyes independence |
 | `EMBED_MODEL` | `nomic-embed-text` | Model for Gate 5 semantic similarity (Ollama only) |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
 | `ANTHROPIC_API_KEY` | — | Required only for `LLM_PROVIDER=anthropic` |
@@ -176,7 +176,7 @@ Every pipeline layer enforces a single invariant: untrusted input never reaches 
 5. **Consistency** — conflict with existing high-trust claims → escalate to human
 
 ### 4-eyes principle
-Extraction and review use **different models** by default (`llama3.1:8b` and `mistral`). A jailbreak that compromises the extractor must not simultaneously compromise the reviewer.
+Extraction and review use **different models** by default. With Ollama: `llama3.1:8b` (extraction) and `mistral` (review). With Anthropic: `claude-haiku-4-5` (extraction) and `claude-sonnet-4-6` (review). A jailbreak that compromises the extractor must not simultaneously compromise the reviewer.
 
 ### Fail-closed
 Unparseable LLM responses are treated as failures — empty extraction returns no claims, unparseable review verdict blocks the write. The system never silently passes bad output.
