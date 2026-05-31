@@ -99,9 +99,14 @@ def run_write_gate(
         )
     claim.gates_passed.append("trust_tier")
 
-    # Gate 4: adversarial review (use pre-computed batch result if supplied)
+    # Gate 4: adversarial review (use pre-computed batch result if supplied).
+    # The normal path (_run_pipeline) pre-computes a batch review with full
+    # source_text before entering the gate loop. This fallback is only reached
+    # in tests or when the gate is called directly without a batch result; in
+    # that case source_text is unavailable so we pass an empty string.
     review = review_result or review_write(
         proposed=[claim],
+        source_text="",
         existing_high_trust=existing_trusted or None,
     )
     if not review.passed:

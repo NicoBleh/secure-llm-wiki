@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from ..llm_client import extract_json_object, get_review_client
 from ..models import Claim
-from ..prompts import REVIEW_SYSTEM_PROMPT
+from ..prompts import build_review_prompt, verify_review_envelope
 
 
 @dataclass
@@ -29,35 +29,32 @@ _MAX_RETRIES = 2
 
 def review_write(
     proposed: list[Claim],
+    source_text: str = "",
     existing_high_trust: list[Claim] | None = None,
 ) -> ReviewResult:
     """Review a proposed write operation (Spec 4.4).
 
-    existing_high_trust: active high-trust claims checked against for
-    unjustified overwriting.
+    source_text: the originating source, passed to the reviewer so it sees
+    the full context (source + proposed claims + existing high-trust claims).
+    existing_high_trust: active high-trust claims checked for unjustified overwriting.
 
-    Retries up to _MAX_RETRIES times on unparseable responses before
-    failing closed — guards against flaky model output without weakening
+    Retries up to _MAX_RETRIES times on unparseable responses or nonce mismatches
+    before failing closed — guards against flaky model output without weakening
     security (a deliberate block still blocks on the first attempt).
     """
     client = get_review_client()
-
-    proposed_lines = "\n".join(
-        f"- [{c.trust_level.value}] {c.text}" for c in proposed
-    )
-    user = f"PROPOSED CLAIMS:\n{proposed_lines}"
-
-    if existing_high_trust:
-        existing_lines = "\n".join(f"- {c.text}" for c in existing_high_trust)
-        user += f"\n\nEXISTING HIGH-TRUST CLAIMS:\n{existing_lines}"
+    system, user, nonce = build_review_prompt(proposed, source_text, existing_high_trust)
 
     last_error = "review model returned unparseable response"
     for attempt in range(1, _MAX_RETRIES + 2):
-        raw = client.complete(REVIEW_SYSTEM_PROMPT, user).text
+        raw = client.complete(system, user).text
         try:
-            result = json.loads(extract_json_object(raw))
-            passed = result.get("verdict") == "pass"
-            reasons = result.get("reasons", [])
+            parsed = json.loads(extract_json_object(raw))
+            if not verify_review_envelope(parsed, nonce):
+                last_error = f"review nonce mismatch (attempt {attempt})"
+                continue
+            passed = parsed.get("verdict") == "pass"
+            reasons = parsed.get("reasons", [])
             return ReviewResult(passed=passed, reasons=reasons)
         except json.JSONDecodeError:
             preview = raw[:80].replace("\n", " ")

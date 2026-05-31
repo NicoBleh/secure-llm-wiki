@@ -334,7 +334,11 @@ def _run_pipeline(
         if c.trust_level.value == "trusted" and c.status.value == "active"
     ]
     with _spinner("[review]   adversarial review (batch)…"):
-        batch_review = review_write(proposed=claims, existing_high_trust=existing_trusted or None)
+        batch_review = review_write(
+            proposed=claims,
+            source_text=source_text,
+            existing_high_trust=existing_trusted or None,
+        )
     status = "PASS" if batch_review.passed else "BLOCK"
     print(f"[review]   {status}  {'; '.join(batch_review.reasons) if batch_review.reasons else 'no issues'}")
     print()
