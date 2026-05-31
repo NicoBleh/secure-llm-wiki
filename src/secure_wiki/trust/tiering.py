@@ -11,9 +11,9 @@ assign_trust() handles per-source assignment.
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import yaml
 
@@ -28,27 +28,49 @@ def _rules_file() -> Path:
     )
     return Path(wiki_root) / "trust_rules.yaml"
 
+
+def _host(uri: str) -> str:
+    """Return the lower-cased hostname of uri, or '' for local paths."""
+    return (urlparse(uri).hostname or "").lower()
+
+
+# Patterns are plain domain names (suffix-match, not free regex).
+# A rule matches when the URI's hostname equals the domain exactly,
+# or ends with '.<domain>' (legitimate subdomain).
+# This prevents trust-elevation via:
+#   https://evil.com/path?ref=attack.mitre.org     (query-string bypass)
+#   https://attack.mitre.org.attacker.net/x        (hostname suffix abuse)
 _BUILTIN_RULES: list[dict] = [
-    {"pattern": r"attack\.mitre\.org",   "level": "trusted",      "comment": "MITRE ATT&CK"},
-    {"pattern": r"atlas\.mitre\.org",    "level": "trusted",      "comment": "MITRE ATLAS"},
-    {"pattern": r"nvd\.nist\.gov",       "level": "trusted",      "comment": "NIST NVD"},
-    {"pattern": r"cve\.mitre\.org",      "level": "trusted",      "comment": "MITRE CVE"},
-    {"pattern": r"owasp\.org",           "level": "trusted",      "comment": "OWASP"},
-    {"pattern": r"arxiv\.org",           "level": "semi-trusted", "comment": "arXiv preprints"},
-    {"pattern": r"github\.com",          "level": "semi-trusted", "comment": "GitHub"},
-    {"pattern": r"stackoverflow\.com",   "level": "semi-trusted", "comment": "Stack Overflow"},
+    {"pattern": "attack.mitre.org",   "level": "trusted",      "comment": "MITRE ATT&CK"},
+    {"pattern": "atlas.mitre.org",    "level": "trusted",      "comment": "MITRE ATLAS"},
+    {"pattern": "nvd.nist.gov",       "level": "trusted",      "comment": "NIST NVD"},
+    {"pattern": "cve.mitre.org",      "level": "trusted",      "comment": "MITRE CVE"},
+    {"pattern": "owasp.org",          "level": "trusted",      "comment": "OWASP"},
+    {"pattern": "arxiv.org",          "level": "semi-trusted", "comment": "arXiv preprints"},
+    {"pattern": "github.com",         "level": "semi-trusted", "comment": "GitHub"},
+    {"pattern": "stackoverflow.com",  "level": "semi-trusted", "comment": "Stack Overflow"},
 ]
 
 
 @dataclass
 class TrustRule:
-    """A single URI-pattern → TrustLevel mapping."""
+    """A single domain → TrustLevel mapping.
+
+    pattern is a plain domain name (e.g. 'attack.mitre.org').
+    Matching is host-only, suffix-anchored: the URI hostname must equal the
+    domain exactly or end with '.<domain>'.  Free regex is not supported —
+    this prevents attackers from constructing URIs that happen to contain a
+    trusted domain in a query string or path component.
+    """
     pattern: str
     level: TrustLevel
     comment: str = ""
 
     def matches(self, uri: str) -> bool:
-        return bool(re.search(self.pattern, uri, re.I))
+        host = _host(uri)
+        # Strip any leftover regex escapes from YAML rules that predate this format
+        domain = self.pattern.replace(r"\.", ".").lstrip("^").rstrip("$").lower()
+        return host == domain or host.endswith("." + domain)
 
 
 class TrustRegistry:

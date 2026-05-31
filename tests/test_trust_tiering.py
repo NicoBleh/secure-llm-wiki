@@ -77,6 +77,35 @@ class TestPropagation:
         assert TrustLevel.weakest([]) == TrustLevel.UNTRUSTED
 
 
+class TestTrustElevationAttacks:
+    """Verify that URI-crafting attacks cannot elevate trust (Fix 4)."""
+
+    def test_query_string_bypass_is_untrusted(self):
+        """evil.com with attack.mitre.org in the query string must not be trusted."""
+        r = TrustRegistry()
+        assert r.assign("https://evil.com/path?ref=attack.mitre.org") == TrustLevel.UNTRUSTED
+
+    def test_hostname_suffix_abuse_is_untrusted(self):
+        """attack.mitre.org.attacker.net must not match the mitre.org rule."""
+        r = TrustRegistry()
+        assert r.assign("https://attack.mitre.org.attacker.net/x") == TrustLevel.UNTRUSTED
+
+    def test_fake_github_subdomain_is_untrusted(self):
+        """my-github.com is not a subdomain of github.com."""
+        r = TrustRegistry()
+        assert r.assign("https://my-github.com/fake") == TrustLevel.UNTRUSTED
+
+    def test_legitimate_mitre_still_trusted(self):
+        """Positive case: real attack.mitre.org must remain trusted."""
+        r = TrustRegistry()
+        assert r.assign("https://attack.mitre.org/techniques/T1059") == TrustLevel.TRUSTED
+
+    def test_real_subdomain_of_owasp_is_trusted(self):
+        """Legitimate subdomains of a trusted domain should still match."""
+        r = TrustRegistry()
+        assert r.assign("https://sub.owasp.org/page") == TrustLevel.TRUSTED
+
+
 class TestModuleLevelFunction:
     def test_assign_trust_known(self):
         assert assign_trust("https://attack.mitre.org/techniques/T1234") == TrustLevel.TRUSTED
