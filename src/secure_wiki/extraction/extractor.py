@@ -10,18 +10,25 @@ from __future__ import annotations
 
 import json
 
-from ..prompts import build_extraction_prompt
+from ..prompts import build_extraction_prompt, verify_extraction_envelope
 from ..llm_client import UsageInfo, get_extraction_client, strip_fences
 from ..models import Claim, ClaimStatus, SourceRef, TrustLevel
 
 
-def _parse_items(raw: str) -> tuple[list[dict], str | None]:
+def _parse_items(raw: str, expected_nonce: str = "") -> tuple[list[dict], str | None]:
     """Parse model output into a list of claim dicts.
 
     Handles three formats models may return despite the system prompt:
       1. Envelope object  {"nonce": "...", "claims": [...]}  (current prompt)
       2. Plain array      [{...}, {...}]                     (legacy)
       3. One JSON value per line                             (some Ollama models)
+
+    When expected_nonce is given and the response is envelope format, the nonce
+    is verified fail-closed: a mismatch returns an empty list so the write gate
+    quarantines rather than passing potentially subverted output.
+
+    Legacy formats (bare array, line-by-line) do not carry a nonce; they are
+    accepted but the parse_error includes a warning so the caller can log it.
 
     Returns (items, parse_error) where parse_error is a short diagnostic string
     when nothing could be parsed, or None on success.
@@ -32,15 +39,19 @@ def _parse_items(raw: str) -> tuple[list[dict], str | None]:
         parsed = json.loads(cleaned)
         # Current format: envelope object with a "claims" key
         if isinstance(parsed, dict) and "claims" in parsed:
+            if expected_nonce and not verify_extraction_envelope(parsed, expected_nonce):
+                return [], "extraction nonce mismatch"
             items = parsed["claims"]
             return (items if isinstance(items, list) else []), None
-        # Legacy format: bare array
+        # Legacy format: bare array — accepted but flagged (nonce unverifiable)
         if isinstance(parsed, list):
-            return parsed, None
+            warning = "legacy format, nonce unverified" if expected_nonce else None
+            return parsed, warning
     except json.JSONDecodeError:
         pass
 
     # Fallback: parse each non-empty line independently and flatten
+    # (some Ollama models emit one JSON object per line)
     items: list[dict] = []
     for line in cleaned.splitlines():
         line = line.strip()
@@ -62,7 +73,8 @@ def _parse_items(raw: str) -> tuple[list[dict], str | None]:
     if not items:
         preview = cleaned[:120].replace("\n", " ")
         return [], f"unparseable response: {preview!r}"
-    return items, None
+    warning = "legacy format, nonce unverified" if expected_nonce else None
+    return items, warning
 
 
 def extract_claims(
@@ -76,10 +88,10 @@ def extract_claims(
     short diagnostic string when the model response could not be parsed.
     """
     client = get_extraction_client()
-    system, user, _nonce = build_extraction_prompt(source_text)
+    system, user, nonce = build_extraction_prompt(source_text)
     result = client.complete(system, user)
 
-    items, parse_error = _parse_items(result.text)
+    items, parse_error = _parse_items(result.text, nonce)
     claims = []
     for item in items:
         if not isinstance(item, dict) or "text" not in item:
