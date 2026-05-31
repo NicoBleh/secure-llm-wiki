@@ -5,6 +5,7 @@ __pycache__/
 .env
 venv/
 .venv/
-CLAUDE.md
 .DS_Store
 wiki_data/
+.vscode/*
+!.vscode/settings.json
