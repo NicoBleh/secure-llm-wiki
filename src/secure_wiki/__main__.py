@@ -23,6 +23,7 @@ import re
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
@@ -37,6 +38,7 @@ except ImportError:
 
 from .extraction.extractor import extract_claims
 from .llm_client import UsageInfo
+from .review.adversarial import review_write
 from .gate.write_gate import GateDecision, run_write_gate
 from .ingestion.sanitizer import sanitize
 from .llm_client import get_embed_client, get_review_client
@@ -309,16 +311,35 @@ def _run_pipeline(
     print(f"[extract]  {len(claims)} claim(s) extracted")
     print()
 
-    # 5. Embeddings
+    # 5. Embeddings — computed in parallel
+    new_embeddings: dict[str, list[float]] = {}
     try:
         embed_client = get_embed_client()
-        new_embeddings = {c.claim_id: embed_client.embed(c.text) for c in claims}
-        print(f"[embed]    embeddings computed for {len(claims)} claim(s)")
+        with _spinner(f"[embed]    computing embeddings for {len(claims)} claim(s)…"):
+            with ThreadPoolExecutor() as pool:
+                futures = {pool.submit(embed_client.embed, c.text): c.claim_id for c in claims}
+                for fut in as_completed(futures):
+                    cid = futures[fut]
+                    try:
+                        new_embeddings[cid] = fut.result()
+                    except Exception:
+                        pass
+        print(f"[embed]    {len(new_embeddings)}/{len(claims)} embedding(s) computed")
     except Exception as exc:
         print(f"[embed]    unavailable ({exc}), Gate 5 falls back to section heuristic")
-        new_embeddings = {}
 
-    # 6. Gate + store
+    # 6. Batch adversarial review — one call for all claims from this source
+    existing_trusted = [
+        c for c in existing
+        if c.trust_level.value == "trusted" and c.status.value == "active"
+    ]
+    with _spinner("[review]   adversarial review (batch)…"):
+        batch_review = review_write(proposed=claims, existing_high_trust=existing_trusted or None)
+    status = "PASS" if batch_review.passed else "BLOCK"
+    print(f"[review]   {status}  {'; '.join(batch_review.reasons) if batch_review.reasons else 'no issues'}")
+    print()
+
+    # 7. Gate + store (review result pre-supplied — no extra LLM call per claim)
     committed = quarantined = escalated = 0
     width = len(f"[gate {len(claims)}/{len(claims)}]") + 2
 
@@ -332,6 +353,7 @@ def _run_pipeline(
             existing_embeddings=existing_embeddings or None,
             duplicate_threshold=sim_cfg["duplicate_threshold"],
             conflict_threshold=sim_cfg["conflict_threshold"],
+            review_result=batch_review,
         )
 
         if outcome.decision == GateDecision.COMMIT:
@@ -468,12 +490,17 @@ def cmd_query(args: argparse.Namespace) -> None:
             break
         if not question:
             continue
+        stream = client.stream(system, question)
         with _spinner("thinking…"):
-            result = client.complete(system, question)
+            first = next(stream)  # blocks until first token — spinner drops here
         print()
-        print(result.text)
-        u = result.usage
-        print(f"\n[tokens] {u.input_tokens} in / {u.output_tokens} out  (total {u.total_tokens})")
+        u = UsageInfo()
+        for chunk in itertools.chain([first], stream):
+            if isinstance(chunk, UsageInfo):
+                u = chunk
+            else:
+                print(chunk, end="", flush=True)
+        print(f"\n\n[tokens] {u.input_tokens} in / {u.output_tokens} out  (total {u.total_tokens})")
 
 
 def cmd_context(args: argparse.Namespace) -> None:

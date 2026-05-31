@@ -1,6 +1,9 @@
+# Runtime dependencies — kept in sync with pyproject.toml [project.dependencies]
 anthropic>=0.40.0
 ollama>=0.4.0
 pypdf>=4.0
 python-dotenv>=1.0
 pyyaml>=6.0
+
+# Dev
 pytest>=8.0

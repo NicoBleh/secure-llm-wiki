@@ -79,21 +79,22 @@ secure-llm-wiki/
 ## Setup
 
 ```bash
-# Create and activate the conda environment
-conda env create -f environment.yml
-conda activate llm-wiki
+# Create and activate a virtual environment (Python 3.10+)
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+# Install the package and dev dependencies
+pip install -e ".[dev]"
 
 # Configure LLM provider and wiki path
 cp .env.example .env
 # Edit .env — defaults to Ollama with llama3.1:8b (extraction) + mistral (review)
-source .env
-
-# Install the package (registers the secure-wiki CLI command)
-pip install -e .
 
 # Run the test suite (no LLM or wiki repo needed)
 pytest -q
 ```
+
+> **uv users:** `uv venv && uv pip install -e ".[dev]"` — same result, much faster.
 
 ## Usage
 

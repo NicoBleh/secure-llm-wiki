@@ -25,7 +25,7 @@ import secrets
 from typing import TYPE_CHECKING, Iterable, Optional, Sequence
 
 if TYPE_CHECKING:  # avoid runtime import cycle with models.py
-    from ..models import Claim
+    from .models import Claim
 
 
 # ===========================================================================
@@ -200,12 +200,14 @@ def _new_nonce() -> str:
 def _trust_value(claim: "Claim") -> str:
     """Return the trust level as a plain string, accepting enum or str."""
     tl = getattr(claim, "trust_level", None)
-    return getattr(tl, "value", tl)  # Enum → .value, str → itself
+    val = getattr(tl, "value", tl)
+    return val if isinstance(val, str) else ""
 
 
 def _status_value(claim: "Claim") -> str:
     st = getattr(claim, "status", None)
-    return getattr(st, "value", st)
+    val = getattr(st, "value", st)
+    return val if isinstance(val, str) else ""
 
 
 def _safe_claim_text(text: str) -> str:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 
@@ -105,6 +106,25 @@ class OllamaClient:
         )
         return CompletionResult(text=response.message.content, usage=usage)
 
+    def stream(self, system: str, user: str) -> Iterator[str | UsageInfo]:
+        """Yield text chunks as they arrive, then a final UsageInfo sentinel."""
+        input_tokens = output_tokens = 0
+        for chunk in self._client.chat(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            options={"temperature": 0},
+            stream=True,
+        ):
+            if chunk.message.content:
+                yield chunk.message.content
+            if getattr(chunk, "done", False):
+                input_tokens = getattr(chunk, "prompt_eval_count", 0) or 0
+                output_tokens = getattr(chunk, "eval_count", 0) or 0
+        yield UsageInfo(input_tokens, output_tokens)
+
     def embed(self, text: str) -> list[float]:
         response = self._client.embed(model=self._model, input=text)
         return response.embeddings[0]
@@ -128,6 +148,21 @@ class AnthropicClient:
             output_tokens=msg.usage.output_tokens,
         )
         return CompletionResult(text=msg.content[0].text, usage=usage)
+
+    def stream(self, system: str, user: str) -> Iterator[str | UsageInfo]:
+        """Yield text chunks as they arrive, then a final UsageInfo sentinel."""
+        with self._client.messages.stream(
+            model=self._model,
+            max_tokens=2048,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        ) as s:
+            yield from s.text_stream
+            final = s.get_final_message()
+            yield UsageInfo(
+                input_tokens=final.usage.input_tokens,
+                output_tokens=final.usage.output_tokens,
+            )
 
     def embed(self, text: str) -> list[float]:
         raise NotImplementedError("Anthropic provider does not support embeddings; set LLM_PROVIDER=ollama for Gate 5 similarity checks")

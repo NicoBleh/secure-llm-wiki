@@ -20,7 +20,7 @@ from enum import Enum
 
 from ..ingestion.sanitizer import SanitizeReport
 from ..models import Claim, ClaimStatus, TrustLevel
-from ..review.adversarial import review_write
+from ..review.adversarial import ReviewResult, review_write
 from ..store.embedding_store import cosine_similarity
 
 # Thresholds — overridable via trust_rules.yaml (loaded by caller)
@@ -49,6 +49,7 @@ def run_write_gate(
     existing_embeddings: dict[str, list[float]] | None = None,
     duplicate_threshold: float = DEFAULT_DUPLICATE_THRESHOLD,
     conflict_threshold: float = DEFAULT_CONFLICT_THRESHOLD,
+    review_result: ReviewResult | None = None,
 ) -> GateOutcome:
     """Run all gates in sequence and return a commit/quarantine/escalate decision.
 
@@ -98,8 +99,8 @@ def run_write_gate(
         )
     claim.gates_passed.append("trust_tier")
 
-    # Gate 4: adversarial review
-    review = review_write(
+    # Gate 4: adversarial review (use pre-computed batch result if supplied)
+    review = review_result or review_write(
         proposed=[claim],
         existing_high_trust=existing_trusted or None,
     )
