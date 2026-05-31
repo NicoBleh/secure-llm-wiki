@@ -14,6 +14,7 @@ import pytest
 from secure_wiki.__main__ import cmd_init, cmd_ingest, cmd_list, _source_id, _preview
 from secure_wiki.llm_client import UsageInfo
 from secure_wiki.models import Claim, ClaimStatus, SourceRef, TrustLevel
+from secure_wiki.review.adversarial import ReviewResult
 
 CORPUS = Path(__file__).parent / "injection_corpus"
 
@@ -89,10 +90,11 @@ class TestCmdIngest:
         monkeypatch.setenv("WIKI_DATA_PATH", str(tmp_path / "wiki"))
         source_file = CORPUS / "08_benign_control.txt"
         extracted = [_make_claim("Adversarial ML attacks target model training data.")]
+        _pass = ReviewResult(passed=True, reasons=[])
 
         with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo(100, 20), None)), \
-             patch("secure_wiki.gate.write_gate.review_write",
-                   return_value=__import__("secure_wiki.review.adversarial", fromlist=["ReviewResult"]).ReviewResult(passed=True, reasons=[])):
+             patch("secure_wiki.__main__.review_write", return_value=_pass), \
+             patch("secure_wiki.gate.write_gate.review_write", return_value=_pass):
             cmd_ingest(_args(source=str(source_file)))
 
         out = capsys.readouterr().out
@@ -103,8 +105,11 @@ class TestCmdIngest:
         monkeypatch.setenv("WIKI_DATA_PATH", str(tmp_path / "wiki"))
         source_file = CORPUS / "01_direct_instruction.txt"
         extracted = [_make_claim("some claim from suspicious source")]
+        _pass = ReviewResult(passed=True, reasons=[])
 
-        with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo(), None)):
+        with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo(), None)), \
+             patch("secure_wiki.__main__.review_write", return_value=_pass), \
+             patch("secure_wiki.gate.write_gate.review_write", return_value=_pass):
             cmd_ingest(_args(source=str(source_file)))
 
         out = capsys.readouterr().out
@@ -115,6 +120,7 @@ class TestCmdIngest:
         monkeypatch.setenv("WIKI_DATA_PATH", str(tmp_path / "wiki"))
         source_file = CORPUS / "08_benign_control.txt"
 
+        # No claims returned → batch review is never reached, no LLM mock needed
         with patch("secure_wiki.__main__.extract_claims", return_value=([], UsageInfo(), "unparseable response: 'raw model output'")), \
              pytest.raises(SystemExit) as exc_info:
             cmd_ingest(_args(source=str(source_file)))
@@ -126,10 +132,11 @@ class TestCmdIngest:
         monkeypatch.setenv("WIKI_DATA_PATH", str(tmp_path / "wiki"))
         source_file = CORPUS / "08_benign_control.txt"
         extracted = [_make_claim("some claim")]
+        _pass = ReviewResult(passed=True, reasons=[])
 
         with patch("secure_wiki.__main__.extract_claims", return_value=(extracted, UsageInfo(), None)), \
-             patch("secure_wiki.gate.write_gate.review_write",
-                   return_value=__import__("secure_wiki.review.adversarial", fromlist=["ReviewResult"]).ReviewResult(passed=True, reasons=[])):
+             patch("secure_wiki.__main__.review_write", return_value=_pass), \
+             patch("secure_wiki.gate.write_gate.review_write", return_value=_pass):
             cmd_ingest(_args(source=str(source_file), trust="trusted"))
 
         assert "manual override" in capsys.readouterr().out
