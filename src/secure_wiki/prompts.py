@@ -274,7 +274,9 @@ def build_review_prompt(
     user = (
         f"<proposed-{nonce}>\n{proposed_block}\n</proposed-{nonce}>\n\n"
         f"<source-{nonce}>\n{source_text}\n</source-{nonce}>\n\n"
-        f"<existing-{nonce}>\n{existing_block}\n</existing-{nonce}>"
+        f"<existing-{nonce}>\n{existing_block}\n</existing-{nonce}>\n\n"
+        f"Respond with ONLY a valid JSON object — no prose, no markdown:\n"
+        f'{{"nonce": "{nonce}", "verdict": "pass" or "block", "reasons": ["..."]}}'
     )
     return system, user, nonce
 
