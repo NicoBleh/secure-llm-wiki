@@ -215,6 +215,11 @@ def _safe_claim_text(text: str) -> str:
     return _TRUST_MARKER_RE.sub("", text).strip()
 
 
+def strip_trust_markers(text: str) -> str:
+    """Public API: remove forged [T]/[S]/[U] tokens from source-derived text."""
+    return _TRUST_MARKER_RE.sub("", text).strip()
+
+
 # ===========================================================================
 # Prompt builders  (the ONLY supported way to construct prompts)
 # ===========================================================================

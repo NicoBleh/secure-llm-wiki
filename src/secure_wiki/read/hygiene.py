@@ -14,7 +14,7 @@ import secrets
 from dataclasses import dataclass
 
 from ..models import Claim, ClaimStatus, TrustLevel
-from ..prompts import CONTEXT_SYSTEM_NOTE
+from ..prompts import CONTEXT_SYSTEM_NOTE, strip_trust_markers
 from ..store.wiki_store import WikiStore
 
 _TRUST_ORDER = [TrustLevel.TRUSTED, TrustLevel.SEMI_TRUSTED, TrustLevel.UNTRUSTED]
@@ -54,7 +54,9 @@ def load_for_context(
 
     claims = [
         c for c in all_claims
-        if c.status in statuses and _trust_rank(c.trust_level) <= min_rank
+        if c.status in statuses
+        and _trust_rank(c.trust_level) <= min_rank
+        and c.trust_level != TrustLevel.UNTRUSTED  # hard floor — never load untrusted
     ]
 
     nonce = secrets.token_hex(8)
@@ -84,7 +86,7 @@ def _format_claims(claims: list[Claim]) -> str:
     lines = []
     for claim in claims:
         sym = _trust_symbol(claim.trust_level)
-        lines.append(f"[{sym}] {claim.text}")
+        lines.append(f"[{sym}] {strip_trust_markers(claim.text)}")
         lines.append(f"    source:    {claim.source.uri}")
         lines.append(f"    section:   {claim.source.section}")
         lines.append(f"    ingested:  {claim.ingested_at}")
